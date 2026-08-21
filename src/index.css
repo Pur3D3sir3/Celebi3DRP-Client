@@ -1,0 +1,32 @@
+/* src/index.css  ←  this should be your ONLY active Tailwind file */
+
+@import "tailwindcss";
+
+/* Optional: your custom variables / overrides */
+:root {
+  --bg: #0f0f11;
+  --card: #17171a;
+  --border: #27272a;
+  --text: #e5e5e5;
+  --text-dim: #a1a1aa;
+  --accent: #6366f1;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  margin: 0;
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom styles for minimap if needed */
+.minimap-grid {
+  background-image: radial-gradient(circle, rgba(26,26,46,0.5) 0%, rgba(15,15,17,0.5) 40%);
+}
+
+]
