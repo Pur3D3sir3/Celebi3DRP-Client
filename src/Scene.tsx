@@ -38,8 +38,8 @@ export const Scene = forwardRef<{
     handleWalk: (point: { x: number; y: number; z: number }) => void;
     handleInteract: (item: SceneItem) => void;
     handleExamine: (item: SceneItem) => void;
-    getAzimuth: () => number; // NEW: Expose azimuth for minimap
-    getLocalPos: () => THREE.Vector3; // NEW: Expose localPosRef for minimap
+    getAzimuth: () => number;
+    getLocalPos: () => THREE.Vector3;
 }, SceneProps>(({ currentScene, setContextMenu, userRank, editMode, selectedItemId, setSelectedItemId, placingItem, setPlacingItem, transformControlsRef }, ref) => {
     const { characters, socket, sceneItems } = useSocket();
     const [localPath, setLocalPath] = useState<[number, number, number][]>([]);
@@ -48,9 +48,13 @@ export const Scene = forwardRef<{
     const itemsGroup = useRef<THREE.Group>(null!);
     const orbitControls = useRef<any>(null!);
     const { scene, gl, camera } = useThree();
+
+    // Camera – rotation is now direct (no lag), position is smoothly followed
     const azimuth = useRef(2.5);
     const elevation = useRef(0.3);
     const distance = useRef(12);
+    const targetDistance = useRef(12);
+
     const keys = useRef({ a: false, d: false, w: false, s: false }).current;
     const localPlayer = useMemo(
         () => characters.find((c) => c.id === socket.id),
@@ -58,21 +62,22 @@ export const Scene = forwardRef<{
     );
     const localPosRef = useRef(new THREE.Vector3(0, 0, 0));
     const cellSize = 0.5;
-    const maxInteractDist = 1.5; // Aligned with server
-    // Day/Night cycle hook
+    const maxInteractDist = 1.5;
     const { timeOfDay, sunElevation, isDay } = useDayNight();
-    // Which scenes have sky? (add more numbers as needed)
     const hasSky = currentScene === 1 || currentScene === 2;
-    useAmbientAudio({ hasSky }); // ← this controls everything
+    useAmbientAudio({ hasSky });
+
     useEffect(() => {
         setLocalPath([]);
         setPendingInteraction(null);
     }, [currentScene]);
+
     useEffect(() => {
         if (localPlayer?.position) {
             localPosRef.current.set(...localPlayer.position);
         }
     }, [localPlayer]);
+
     const sceneConfig = useMemo(() => {
         switch (currentScene) {
             case 1: return { planeSize: [30, 30], floorColor: "#70543E" };
@@ -80,10 +85,12 @@ export const Scene = forwardRef<{
             default: return { planeSize: [30, 30], floorColor: "#70543E" };
         }
     }, [currentScene]);
+
     const halfExtent = sceneConfig.planeSize[0] / 2;
     const gridCols = Math.ceil(sceneConfig.planeSize[0] / cellSize);
     const gridRows = Math.ceil(sceneConfig.planeSize[1] / cellSize);
     const [grid, setGrid] = useState<boolean[][]>([]);
+
     useEffect(() => {
         const newGrid = Array.from({ length: gridCols }, () => Array(gridRows).fill(false));
         sceneItems.forEach((item: any) => {
@@ -124,18 +131,21 @@ export const Scene = forwardRef<{
         });
         setGrid(newGrid);
     }, [sceneItems, currentScene, cellSize, gridCols, gridRows, halfExtent]);
+
     const worldToGrid = (x: number, z: number): [number, number] | null => {
         const col = Math.floor((x + halfExtent) / cellSize);
         const row = Math.floor((z + halfExtent) / cellSize);
         if (col < 0 || col >= gridCols || row < 0 || row >= gridRows) return null;
         return [col, row];
     };
+
     const gridToWorld = (col: number, row: number): [number, number] => {
         return [
             col * cellSize - halfExtent + cellSize / 2,
             row * cellSize - halfExtent + cellSize / 2,
         ];
     };
+
     const findNearestWalkable = (goalGrid: [number, number]): [number, number] | null => {
         if (!grid[goalGrid[0]][goalGrid[1]]) return goalGrid;
         const queue: [number, number][] = [goalGrid];
@@ -157,11 +167,13 @@ export const Scene = forwardRef<{
         }
         return null;
     };
+
     const heuristic = (a: [number, number], b: [number, number]) => {
         const dx = Math.abs(a[0] - b[0]);
         const dz = Math.abs(a[1] - b[1]);
         return Math.sqrt(dx * dx + dz * dz);
     };
+
     const findPath = (
         startPos: [number, number, number],
         goalPos: [number, number, number]
@@ -244,6 +256,7 @@ export const Scene = forwardRef<{
         }
         return [];
     };
+
     const lineIntersectsBlocked = (startX: number, startZ: number, endX: number, endZ: number) => {
         const dx = endX - startX;
         const dz = endZ - startZ;
@@ -260,6 +273,7 @@ export const Scene = forwardRef<{
         }
         return false;
     };
+
     const smoothPath = (path: [number, number, number][]) => {
         if (path.length < 3) return path;
         const smoothed: [number, number, number][] = [path[0]];
@@ -275,9 +289,9 @@ export const Scene = forwardRef<{
         smoothed.push(path[path.length - 1]);
         return smoothed;
     };
+
     const handlePlaneClick = (e: { point: { x: number; z: number } }) => {
         const target = [e.point.x, 0, e.point.z] as [number, number, number];
-        console.log("Plane clicked → new target:", target);
         if (placingItem) {
             socket.emit('admin_place_item', {
                 item_id: placingItem.item_id,
@@ -298,11 +312,11 @@ export const Scene = forwardRef<{
         let path = findPath(localPosRef.current.toArray() as [number, number, number], target);
         if (path.length > 0) {
             path = smoothPath(path);
-            console.log("New path computed – length:", path.length);
             setLocalPath(path);
             setPendingInteraction(null);
         }
     };
+
     const handleItemClick = (item: SceneItem, e: any) => {
         if (e?.stopPropagation) {
             e.stopPropagation();
@@ -319,6 +333,7 @@ export const Scene = forwardRef<{
             setLocalPath(path);
         }
     };
+
     useImperativeHandle(ref, () => ({
         handleWalk: (point) => {
             const target = [point.x, 0, point.z] as [number, number, number];
@@ -336,9 +351,10 @@ export const Scene = forwardRef<{
             const desc = `This is a ${item.name.replace(/_/g, ' ')}.`;
             setSpeeches((prev) => ({ ...prev, [socket.id]: { text: desc, time: Date.now() } }));
         },
-        getAzimuth: () => azimuth.current, // NEW: For minimap rotation
-        getLocalPos: () => localPosRef.current.clone(), // NEW: For minimap player pos
+        getAzimuth: () => azimuth.current,
+        getLocalPos: () => localPosRef.current.clone(),
     }));
+
     useEffect(() => {
         const interval = setInterval(() => {
             setSpeeches((prev) => {
@@ -356,6 +372,7 @@ export const Scene = forwardRef<{
         }, 1000);
         return () => clearInterval(interval);
     }, []);
+
     const animationClips = useMemo(() => {
         const idleGltf = useGLTF("/meshy/idle.glb");
         const walkGltf = useGLTF("/meshy/walk.glb");
@@ -370,12 +387,15 @@ export const Scene = forwardRef<{
             pickup: pickupGltf.animations[1],
         };
     }, []);
+
     const showTeleportDebug = import.meta.env.DEV;
     const teleportSpots = useMemo(() => [
         { from_scene: 1, from_x: 15, from_z: 0, radius: 2.0, to_scene: 2 },
         { from_scene: 2, from_x: -15, from_z: 0, radius: 2.0, to_scene: 1 },
     ], []);
-    const onNextWaypoint = () => setLocalPath((prev) => prev.slice(1));
+
+    const onNextWaypoint = () => setLocalPath([]);
+
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
             switch (e.key.toLowerCase()) {
@@ -400,47 +420,60 @@ export const Scene = forwardRef<{
             window.removeEventListener("keyup", handleKeyUp);
         };
     }, [keys]);
-    const cameraRef = useRef<THREE.Camera>(null!);
+
+    // Camera – rotation is instant & responsive, position follow is smooth
     useFrame((state, delta) => {
-        if (!localPlayer || !cameraRef.current) return;
-        const targetPos = localPosRef.current;
-        const rotSpeed = 1.2;
-        if (keys.a) azimuth.current -= rotSpeed * delta;
-        if (keys.d) azimuth.current += rotSpeed * delta;
-        if (keys.w) elevation.current = Math.max(0.05, elevation.current - rotSpeed * 0.5 * delta);
-        if (keys.s) elevation.current = Math.min(Math.PI / 2 - 0.1, elevation.current + rotSpeed * 0.5 * delta);
+        if (!localPlayer) return;
+        const dt = Math.min(delta, 0.05);
+
+        const rotSpeed = 1.6;
+
+        // Direct rotation (no lag)
+        if (keys.a) azimuth.current -= rotSpeed * dt;
+        if (keys.d) azimuth.current += rotSpeed * dt;
+        if (keys.w) elevation.current = Math.max(0.08, elevation.current - rotSpeed * 0.55 * dt);
+        if (keys.s) elevation.current = Math.min(Math.PI / 2 - 0.12, elevation.current + rotSpeed * 0.55 * dt);
+
         azimuth.current = azimuth.current % (Math.PI * 2);
+
+        // Only zoom is lightly smoothed
+        distance.current += (targetDistance.current - distance.current) * (1 - Math.exp(-9 * dt));
+
+        const targetPos = localPosRef.current;
+
         const offset = new THREE.Vector3(
             Math.sin(azimuth.current) * Math.cos(elevation.current) * distance.current,
-            Math.sin(elevation.current) * distance.current + 2,
+            Math.sin(elevation.current) * distance.current + 1.85,
             Math.cos(azimuth.current) * Math.cos(elevation.current) * distance.current
         );
+
         const idealCamPos = targetPos.clone().add(offset);
-        const isMoving = localPath && localPath.length > 0;
-        if (isMoving) {
-            state.camera.position.copy(idealCamPos);
-        } else {
-            state.camera.position.lerp(idealCamPos, 0.12);
-        }
+
+        // Strong but still smooth follow
+        const followSmooth = 1 - Math.exp(-12 * dt);
+        state.camera.position.lerp(idealCamPos, followSmooth);
+
         const lookTarget = new THREE.Vector3(
             targetPos.x,
-            targetPos.y + 1.65,
+            targetPos.y + 1.55,
             targetPos.z
         );
         state.camera.lookAt(lookTarget);
     });
+
     useEffect(() => {
         const handleWheel = (e: WheelEvent) => {
             e.preventDefault();
-            distance.current = THREE.MathUtils.clamp(
-                distance.current + e.deltaY * 0.012,
-                5,
-                35
+            targetDistance.current = THREE.MathUtils.clamp(
+                targetDistance.current + e.deltaY * 0.014,
+                5.5,
+                32
             );
         };
         window.addEventListener("wheel", handleWheel, { passive: false });
         return () => window.removeEventListener("wheel", handleWheel);
     }, []);
+
     useEffect(() => {
         if (!camera || !gl.domElement) return;
         const tc = new TransformControls(camera, gl.domElement);
@@ -468,6 +501,7 @@ export const Scene = forwardRef<{
             tc.dispose();
         };
     }, [scene, gl, camera, socket, transformControlsRef]);
+
     useEffect(() => {
         if (transformControlsRef.current && selectedItemId) {
             const obj = itemsGroup.current?.getObjectByName(`item-${selectedItemId}`);
@@ -478,20 +512,19 @@ export const Scene = forwardRef<{
             transformControlsRef.current.detach();
         }
     }, [selectedItemId, transformControlsRef]);
-    // ── Dynamic sky color fallback (used when Sky is disabled)
+
     useFrame(() => {
-        const skyColor = getSkyColor(timeOfDay);
         if (!hasSky) {
             scene.background = new THREE.Color(0x000000);
             scene.fog = new THREE.FogExp2(0x000000, 0.001);
         }
     });
+
     return (
         <>
-            <OrbitControls ref={orbitControls} enablePan enableZoom enableRotate />
+            <OrbitControls ref={orbitControls} enabled={false} enablePan={false} enableZoom={false} enableRotate={false} />
             {hasSky && (
                 <>
-                    {/* Clean sky — no ground interference */}
                     <Sky
                         distance={5000}
                         sunPosition={[sunElevation > -10 ? 60 : -60, sunElevation * 1.2, 0]}
@@ -501,9 +534,8 @@ export const Scene = forwardRef<{
                         mieDirectionalG={0.95}
                         rayleigh={0.35}
                         turbidity={2.5}
-                        ground={false} // Prevents sky dome clipping floor
+                        ground={false}
                     />
-                    {/* Distant clouds — no floor intersection */}
                     <Cloud
                         position={[0, 220, 0]}
                         speed={0.3}
@@ -514,7 +546,6 @@ export const Scene = forwardRef<{
                         bounds={[200, 50, 200]}
                         concentrate="inside"
                     />
-                    {/* Stars at night */}
                     {!isDay && (
                         <Stars
                             radius={250}
@@ -539,7 +570,6 @@ export const Scene = forwardRef<{
             {!hasSky && (
                 <color attach="background" args={['#000000']} />
             )}
-            {/* Dynamic sun/moon light */}
             <directionalLight
                 position={[sunElevation > -10 ? 100 : -100, Math.max(sunElevation, -20), 50]}
                 intensity={hasSky ? (isDay ? 4 : 0.8) : 0}
@@ -547,9 +577,7 @@ export const Scene = forwardRef<{
                 castShadow={hasSky}
                 shadow-mapSize={[2048, 2048]}
             />
-            {/* Ambient light adjusts with time of day */}
             <ambientLight intensity={hasSky ? (isDay ? 0.6 : 0.2) : 0.1} />
-            {/* Ground plane */}
             <mesh
                 rotation-x={-Math.PI / 2}
                 onClick={handlePlaneClick}
@@ -630,7 +658,6 @@ export const Scene = forwardRef<{
                     );
                 })}
             </group>
-            <perspectiveCamera ref={cameraRef} makeDefault fov={60} near={0.1} far={300} />
         </>
     );
 });

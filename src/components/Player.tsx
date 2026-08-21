@@ -7,22 +7,14 @@ import { Billboard, Html } from "@react-three/drei";
 import { Character } from "../lib/types";
 import { useSocket } from "../lib/constants";
 
-const BASE_SPEED = 3.6;                    // Increased from 2.0 — matches RuneScape normal walk feel
-// const BASE_SPEED = 3.2;                 // slightly slower / more classic
-// const BASE_SPEED = 4.0;                 // brisker pace
-
-// Later when run toggle is wired:
-// const effectiveSpeed = runEnabled ? 5.8 : BASE_SPEED;
-// const walkTimeScale = runEnabled ? 2.4 : 1.8;
-
-const STOP_THRESHOLD = 0.08;
-const UPDATE_INTERVAL = 0.2;
-const TRANSITION_DURATION = 0.4;
+const BASE_SPEED = 5.1;                    // raised so feet match animation
+const UPDATE_INTERVAL = 0.18;
+const TRANSITION_DURATION = 0.35;
 const IDLE_FALLBACK_WEIGHT = 0.3;
 const CATCHUP_MIN_DISTANCE = 0.2;
 const RECONCILE_LERP = 0.15;
 const MIN_CORRECTION_DIST = 0.8;
-const CONTINUOUS_RECONCILE_THRESHOLD = 0.5;
+const CONTINUOUS_RECONCILE_THRESHOLD = 1.0;
 const CONTINUOUS_RECONCILE_ALPHA = 0.06;
 const END_PATH_DISABLE_THRESHOLD = 0.85;
 
@@ -48,6 +40,21 @@ type PlayerProps = {
 };
 
 type AnimState = "idle" | "walkstart" | "walkforward" | "stopwalk" | "pickup";
+
+function getClosestProgress(curve: THREE.CatmullRomCurve3, point: THREE.Vector3, samples = 48): number {
+    let closest = 0;
+    let minDist = Infinity;
+    for (let i = 0; i <= samples; i++) {
+        const u = i / samples;
+        const p = curve.getPointAt(u);
+        const d = point.distanceToSquared(p);
+        if (d < minDist) {
+            minDist = d;
+            closest = u;
+        }
+    }
+    return closest;
+}
 
 export function Player({
                            character,
@@ -115,25 +122,18 @@ export function Player({
         return acts as Record<AnimState, THREE.AnimationAction | null>;
     }, [mixer, clips]);
 
-    // Speed up walk animations to match faster ground movement (prevents sliding feet)
     useEffect(() => {
-        if (actions.walkforward) {
-            actions.walkforward.timeScale = 1.8;   // 1.7–1.9 usually looks best with BASE_SPEED 3.6
-        }
-        if (actions.walkstart) {
-            actions.walkstart.timeScale = 1.5;
-        }
-        if (actions.stopwalk) {
-            actions.stopwalk.timeScale = 1.5;
-        }
+        if (actions.walkforward) actions.walkforward.timeScale = 1.55; // matched to new BASE_SPEED
+        if (actions.walkstart) actions.walkstart.timeScale = 1.4;
+        if (actions.stopwalk) actions.stopwalk.timeScale = 1.4;
     }, [actions]);
 
     const [currentState, setCurrentState] = useState<AnimState>("idle");
     const [isPickupLocked, setIsPickupLocked] = useState(false);
     const prevActionRef = useRef<THREE.AnimationAction | null>(null);
 
-    const [previousPosition, setPreviousPosition] = useState(character.position);
     const lastServerUpdate = useRef(Date.now());
+    const targetPosition = useRef(new THREE.Vector3(...character.position));
 
     const velocity = useRef(new THREE.Vector3());
     const pathCurve = useRef<THREE.CatmullRomCurve3 | null>(null);
@@ -141,11 +141,18 @@ export function Player({
     const isInteracting = useRef(false);
     const lastInteractedItemRef = useRef<number | null>(null);
 
+    const remoteIsMovingRef = useRef(false);
+    const lastRemoteMoveTimeRef = useRef(0);
+
+    const lastSimTimeRef = useRef(performance.now());
+    const backgroundIntervalRef = useRef<number | null>(null);
+
     useEffect(() => {
         if (isLocal && localPath && localPath.length > 1) {
             const points = localPath.map(p => new THREE.Vector3(...p));
             pathCurve.current = new THREE.CatmullRomCurve3(points, false, 'centripetal', 0.5);
             pathProgress.current = 0;
+            lastSimTimeRef.current = performance.now();
         } else {
             pathCurve.current = null;
         }
@@ -154,9 +161,7 @@ export function Player({
     useEffect(() => {
         if (currentState === "pickup") {
             setIsPickupLocked(true);
-            const timer = setTimeout(() => {
-                setIsPickupLocked(false);
-            }, 2000);
+            const timer = setTimeout(() => setIsPickupLocked(false), 2000);
             return () => clearTimeout(timer);
         }
     }, [currentState]);
@@ -204,19 +209,22 @@ export function Player({
         };
     }, [currentState, actions]);
 
+    // Only react to real position changes (prevents idle players getting walk anim)
     useEffect(() => {
-        if (group.current && character.position) {
-            if (!isLocal) {
-                setPreviousPosition([...group.current.position]);
-            }
-            group.current.position.set(...character.position);
-            lastServerUpdate.current = Date.now();
+        if (!isLocal && character.position) {
+            const [x, y, z] = character.position;
+            const curr = targetPosition.current;
+            const moved =
+                Math.abs(curr.x - x) > 0.001 ||
+                Math.abs(curr.y - y) > 0.001 ||
+                Math.abs(curr.z - z) > 0.001;
 
-            if (localPosRef?.current) {
-                localPosRef.current.copy(group.current.position);
+            if (moved) {
+                targetPosition.current.set(x, y, z);
+                lastServerUpdate.current = Date.now();
             }
         }
-    }, [character.position, isLocal, localPosRef]);
+    }, [character.position, isLocal]);
 
     useEffect(() => {
         if (!isLocal) return;
@@ -224,9 +232,7 @@ export function Player({
         const handleSceneChange = (data: { scene: number; position?: [number, number, number] }) => {
             if (data.position && group.current) {
                 group.current.position.set(...data.position);
-                if (localPosRef?.current) {
-                    localPosRef.current.copy(group.current.position);
-                }
+                if (localPosRef?.current) localPosRef.current.copy(group.current.position);
                 setCurrentState("idle");
                 if (actions.idle) {
                     actions.idle.reset().play();
@@ -246,14 +252,101 @@ export function Player({
         return () => socket.off("scene_change", handleSceneChange);
     }, [isLocal, socket, actions, localPosRef]);
 
+    // Background walking – heavily capped so it never rockets to the end
+    useEffect(() => {
+        if (!isLocal) return;
+
+        const advancePath = (dtSeconds: number) => {
+            if (!pathCurve.current || !group.current) return;
+
+            const curveLength = pathCurve.current.getLength();
+            if (curveLength <= 0) return;
+
+            // Slightly reduced speed + hard per-tick cap while backgrounded
+            let step = (BASE_SPEED * 0.75 * dtSeconds) / curveLength;
+            step = Math.min(step, 0.007); // very conservative
+
+            pathProgress.current = Math.min(pathProgress.current + step, 1);
+
+            if (pathProgress.current < 1) {
+                const targetPoint = pathCurve.current.getPointAt(pathProgress.current);
+                const tangent = pathCurve.current.getTangentAt(pathProgress.current).normalize();
+
+                group.current.position.copy(targetPoint);
+                velocity.current.copy(tangent.multiplyScalar(BASE_SPEED));
+                group.current.lookAt(group.current.position.clone().add(tangent));
+
+                if (localPosRef?.current) {
+                    localPosRef.current.copy(group.current.position);
+                }
+
+                const now = performance.now() / 1000;
+                if (now - lastUpdateRef.current > UPDATE_INTERVAL) {
+                    const pos = group.current.position;
+                    socket.emit("position_update", [pos.x, pos.y, pos.z], () => {});
+                    lastUpdateRef.current = now;
+                }
+            } else {
+                pathCurve.current = null;
+                pathProgress.current = 0;
+                velocity.current.set(0, 0, 0);
+                onNextWaypoint?.();
+            }
+        };
+
+        const startBackground = () => {
+            if (backgroundIntervalRef.current !== null) return;
+            lastSimTimeRef.current = performance.now();
+
+            backgroundIntervalRef.current = window.setInterval(() => {
+                if (!document.hidden) return;
+
+                const now = performance.now();
+                const dt = Math.min((now - lastSimTimeRef.current) / 1000, 0.08);
+                lastSimTimeRef.current = now;
+
+                advancePath(dt);
+            }, 50);
+        };
+
+        const stopBackground = () => {
+            if (backgroundIntervalRef.current !== null) {
+                clearInterval(backgroundIntervalRef.current);
+                backgroundIntervalRef.current = null;
+            }
+        };
+
+        const onVisibilityChange = () => {
+            if (document.hidden) {
+                startBackground();
+            } else {
+                stopBackground();
+                if (group.current) {
+                    const pos = group.current.position;
+                    socket.emit("position_update", [pos.x, pos.y, pos.z], () => {});
+                }
+            }
+        };
+
+        document.addEventListener("visibilitychange", onVisibilityChange);
+        if (document.hidden) startBackground();
+
+        return () => {
+            stopBackground();
+            document.removeEventListener("visibilitychange", onVisibilityChange);
+        };
+    }, [isLocal, socket, onNextWaypoint, localPosRef]);
+
     useFrame((_, delta) => {
         if (!group.current) return;
+        const dt = Math.min(delta, 0.05);
         const pos = group.current.position;
 
+        // LOCAL PLAYER
         if (isLocal && pathCurve.current) {
             const curveLength = pathCurve.current.getLength();
-            let step = BASE_SPEED * delta / curveLength;
-            step = Math.min(step, 0.01);
+            let step = BASE_SPEED * dt / curveLength;
+            step = Math.min(step, 0.012);
 
             pathProgress.current = Math.min(pathProgress.current + step, 1);
 
@@ -268,10 +361,17 @@ export function Player({
                 const serverPos = new THREE.Vector3(...character.position);
                 const currentDesync = pos.distanceTo(serverPos);
 
+                let didCorrect = false;
                 if (pathProgress.current < END_PATH_DISABLE_THRESHOLD && currentDesync > CONTINUOUS_RECONCILE_THRESHOLD) {
                     pos.lerp(serverPos, CONTINUOUS_RECONCILE_ALPHA);
+                    didCorrect = true;
                 } else if (currentDesync > 1.2) {
                     pos.lerp(serverPos, 0.12);
+                    didCorrect = true;
+                }
+
+                if (didCorrect) {
+                    pathProgress.current = getClosestProgress(pathCurve.current, pos);
                 }
 
                 const now = performance.now() / 1000;
@@ -282,7 +382,9 @@ export function Player({
                             const desyncDist = pos.distanceTo(serverPos);
                             if (desyncDist > MIN_CORRECTION_DIST) {
                                 pos.lerp(serverPos, RECONCILE_LERP);
-                                pathProgress.current = Math.max(0, pathProgress.current - step * 1.2);
+                                if (pathCurve.current) {
+                                    pathProgress.current = getClosestProgress(pathCurve.current, pos);
+                                }
                             }
                             if (localPosRef?.current) localPosRef.current.copy(pos);
                         } else if (response?.status === 'error') {
@@ -298,7 +400,6 @@ export function Player({
                 velocity.current.set(0, 0, 0);
                 onNextWaypoint?.();
 
-                // Interaction trigger when path completes
                 if (pendingInteraction && setPendingInteraction && maxInteractDist) {
                     if (isInteracting.current) return;
                     if (lastInteractedItemRef.current === pendingInteraction.instance_id) {
@@ -326,7 +427,6 @@ export function Player({
 
                     const interactionData = { ...pendingInteraction };
                     setPendingInteraction(null);
-
                     setCurrentState("idle");
 
                     setTimeout(() => {
@@ -357,7 +457,6 @@ export function Player({
                 }
             }
         } else if (isLocal) {
-            // Interaction trigger when already close (no path)
             if (pendingInteraction && setPendingInteraction && maxInteractDist) {
                 if (isInteracting.current) return;
                 if (lastInteractedItemRef.current === pendingInteraction.instance_id) {
@@ -385,7 +484,6 @@ export function Player({
 
                 const interactionData = { ...pendingInteraction };
                 setPendingInteraction(null);
-
                 setCurrentState("idle");
 
                 setTimeout(() => {
@@ -422,35 +520,53 @@ export function Player({
             }
         }
 
+        // REMOTE PLAYERS
         if (!isLocal) {
-            const timeSinceUpdate = (Date.now() - lastServerUpdate.current) / 1000;
-            const alpha = Math.min(timeSinceUpdate / 0.1, 1.0);
-            const interpolatedPos = new THREE.Vector3().lerpVectors(
-                new THREE.Vector3(...previousPosition),
-                new THREE.Vector3(...character.position),
-                alpha
-            );
-            group.current.position.lerp(interpolatedPos, 0.1);
+            const lerpFactor = 1 - Math.exp(-11 * dt);
+            group.current.position.lerp(targetPosition.current, lerpFactor);
 
-            if (previousPosition[0] !== character.position[0] || previousPosition[2] !== character.position[2]) {
-                group.current.lookAt(new THREE.Vector3(...character.position));
+            const dx = targetPosition.current.x - group.current.position.x;
+            const dz = targetPosition.current.z - group.current.position.z;
+            if (dx * dx + dz * dz > 0.0004) {
+                group.current.lookAt(targetPosition.current.x, group.current.position.y, targetPosition.current.z);
+            }
+
+            const distToTarget = group.current.position.distanceTo(targetPosition.current);
+            const timeSinceUpdate = Date.now() - lastServerUpdate.current;
+
+            if (distToTarget > 0.07 || timeSinceUpdate < 280) {
+                remoteIsMovingRef.current = true;
+                lastRemoteMoveTimeRef.current = Date.now();
+            } else if (Date.now() - lastRemoteMoveTimeRef.current > 450) {
+                remoteIsMovingRef.current = false;
             }
         }
 
+        // Animation state machine
         if (!isPickupLocked) {
             const isMoving = isLocal
                 ? !!pathCurve.current
-                : (previousPosition[0] !== character.position[0] || previousPosition[2] !== character.position[2]);
+                : remoteIsMovingRef.current;
 
             if (isMoving) {
-                if (currentState === "idle" || currentState === "stopwalk") {
-                    setCurrentState("walkstart");
-                } else if (
-                    currentState === "walkstart" &&
-                    actions.walkstart &&
-                    actions.walkstart.time >= actions.walkstart.getClip().duration * 0.75
-                ) {
-                    setCurrentState("walkforward");
+                if (isLocal) {
+                    if (currentState === "idle" || currentState === "stopwalk") {
+                        setCurrentState("walkstart");
+                    } else if (
+                        currentState === "walkstart" &&
+                        actions.walkstart &&
+                        actions.walkstart.time >= actions.walkstart.getClip().duration * 0.75
+                    ) {
+                        setCurrentState("walkforward");
+                    }
+                } else {
+                    if (currentState !== "walkforward" && currentState !== "walkstart") {
+                        setCurrentState("walkforward");
+                    } else if (currentState === "walkstart") {
+                        if (actions.walkstart && actions.walkstart.time >= actions.walkstart.getClip().duration * 0.6) {
+                            setCurrentState("walkforward");
+                        }
+                    }
                 }
             } else {
                 if (currentState === "walkforward" || currentState === "walkstart") {
@@ -474,7 +590,7 @@ export function Player({
             setIsPickupLocked(false);
         }
 
-        mixer.update(delta);
+        mixer.update(dt);
 
         if (rootBoneRef.current) {
             rootBoneRef.current.position.x = 0;
