@@ -34,8 +34,7 @@ function App() {
                 .get("/user", { headers: { Authorization: `Bearer ${token}` } })
                 .then((res) => {
                     setUser(res.data.user);
-                    setCurrentScene(res.data.user.current_scene || 1);
-                    setScreen(res.data.user.character_model ? "hotel" : "character_select");
+                    setScreen("character_select");
                 })
                 .catch(() => {
                     localStorage.removeItem("token");
@@ -50,8 +49,7 @@ function App() {
         localStorage.setItem("token", newToken);
         setToken(newToken);
         setUser(newUser);
-        setCurrentScene(newUser.current_scene || 1);
-        setScreen(newUser.character_model ? "hotel" : "character_select");
+        setScreen("character_select");
     };
 
     const handleRegister = (newToken: string) => {
@@ -61,31 +59,18 @@ function App() {
             .get("/user", { headers: { Authorization: `Bearer ${newToken}` } })
             .then((res) => {
                 setUser(res.data.user);
-                setCurrentScene(res.data.user.current_scene || 1);
                 setScreen("character_select");
             })
-            .catch((err) => {
-                console.error("Error fetching user after register:", err);
-                setScreen("login");
-            });
+            .catch(() => setScreen("login"));
     };
 
     const handleSelectCharacter = () => {
-        axios
-            .get("/user", { headers: { Authorization: `Bearer ${token!}` } })
-            .then((res) => {
-                setUser(res.data.user);
-                setCurrentScene(res.data.user.current_scene || 1);
-            })
-            .catch((err) => console.error("Error fetching user after select:", err));
         setScreen("hotel");
     };
 
     const handleEnterGame = () => {
         setScreen("game-loading");
-        setTimeout(() => {
-            setScreen("game");
-        }, 100);
+        setTimeout(() => setScreen("game"), 100);
     };
 
     const handleLogout = () => {
@@ -119,8 +104,6 @@ function App() {
                     onSelectMode={(mode) => {
                         if (mode === "free_roam") {
                             handleEnterGame();
-                        } else {
-                            setScreen("hotel");
                         }
                     }}
                     onLogout={handleLogout}
@@ -189,19 +172,16 @@ function GameContent({
     const minimapCanvasRef = useRef<HTMLCanvasElement>(null);
     const isMovingRef = useRef(false);
 
-    // RuneScape-style energy system
     useEffect(() => {
         const interval = setInterval(() => {
             setEnergy((prev) => {
                 if (runEnabled && isMovingRef.current) {
-                    // Drain while running and moving
                     const next = Math.max(0, prev - 1.15);
                     if (next <= 0) {
                         setRunEnabled(false);
                     }
                     return next;
                 } else {
-                    // Regenerate when not running (or standing still)
                     return Math.min(100, prev + 0.65);
                 }
             });
@@ -272,6 +252,7 @@ function GameContent({
 
             ctx.clearRect(0, 0, width, height);
 
+            // Background
             const bgGradient = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, radius);
             bgGradient.addColorStop(0, 'rgba(20, 20, 35, 0.92)');
             bgGradient.addColorStop(0.65, 'rgba(12, 12, 25, 0.96)');
@@ -286,6 +267,7 @@ function GameContent({
             ctx.arc(centerX, centerY, radius - 6, 0, Math.PI * 2);
             ctx.fill();
 
+            // Border rings
             ctx.strokeStyle = '#2a2a2a';
             ctx.lineWidth = 3.2;
             ctx.lineCap = 'round';
@@ -301,10 +283,12 @@ function GameContent({
             const playerPos = sceneRef.current?.getLocalPos() ?? new THREE.Vector3(0, 0, 0);
             const heading = sceneRef.current?.getAzimuth() || 0;
 
+            // ── Rotated map content ──
             ctx.save();
             ctx.translate(centerX, centerY);
             ctx.rotate(heading);
 
+            // Blocked items
             sceneItems.forEach((item) => {
                 const dx = (item.pos_x - playerPos.x) * mapScale;
                 const dz = (item.pos_z - playerPos.z) * mapScale;
@@ -330,6 +314,7 @@ function GameContent({
                 ctx.restore();
             });
 
+            // Interactable dots
             sceneItems.forEach((item) => {
                 if (!item.is_interactable) return;
                 const dx = (item.pos_x - playerPos.x) * mapScale;
@@ -348,6 +333,7 @@ function GameContent({
                 ctx.fill();
             });
 
+            // Other players
             characters.forEach((char) => {
                 if (char.id === socket.id) return;
                 const dx = (char.position[0] - playerPos.x) * mapScale;
@@ -363,6 +349,7 @@ function GameContent({
 
             ctx.restore();
 
+            // Player dot (always center, upright)
             ctx.shadowColor = '#00bfff';
             ctx.shadowBlur = 5;
             ctx.fillStyle = '#0000ff';
@@ -371,38 +358,35 @@ function GameContent({
             ctx.fill();
             ctx.shadowBlur = 0;
 
-            ctx.font = 'bold 11px Arial';
-            ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-
+            // ── NESW letters – RuneScape style (always upright) ──
             const compass = [
                 { label: 'N', angle: 0 },
                 { label: 'E', angle: Math.PI / 2 },
                 { label: 'S', angle: Math.PI },
-                { label: 'W', angle: 3 * Math.PI / 2 },
+                { label: 'W', angle: (3 * Math.PI) / 2 },
             ];
 
-            const labelRadius = radius - 12;
+            const labelRadius = radius - 13;
+
+            ctx.font = 'bold 12px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
 
             compass.forEach(({ label, angle }) => {
+                // Position rotates with heading, letter itself stays upright
                 const screenAngle = angle + heading;
-
                 const x = centerX + Math.cos(screenAngle) * labelRadius;
                 const y = centerY + Math.sin(screenAngle) * labelRadius;
 
-                ctx.save();
-                ctx.translate(x, y);
-                ctx.rotate(-screenAngle);
-
-                ctx.shadowColor = 'rgba(255, 255, 255, 0.6)';
+                // Soft glow
+                ctx.shadowColor = 'rgba(255, 255, 255, 0.55)';
                 ctx.shadowBlur = 3;
-                ctx.fillText(label, 0, 0);
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
+                ctx.fillText(label, x, y);
 
+                // Crisp pass
                 ctx.shadowBlur = 0;
-                ctx.fillText(label, 0, 0);
-
-                ctx.restore();
+                ctx.fillText(label, x, y);
             });
 
             animationFrameId = requestAnimationFrame(drawMinimap);
@@ -474,7 +458,7 @@ function GameContent({
                     ref={sceneRef}
                     currentScene={currentScene}
                     setContextMenu={setContextMenu}
-                    userRank={user.rank}
+                    userRank={user?.rank || 'user'}
                     editMode={editMode}
                     selectedItemId={selectedItemId}
                     setSelectedItemId={setSelectedItemId}
@@ -490,7 +474,7 @@ function GameContent({
                 <ContextMenuComponent menu={contextMenu} setMenu={setContextMenu} sceneRef={sceneRef} />
             )}
 
-            {user.rank === 'admin' && (
+            {user?.rank === 'admin' && (
                 <button
                     onClick={() => {
                         setEditMode(!editMode);
@@ -532,7 +516,7 @@ function GameContent({
                 />
             )}
 
-            {/* MINIMAP + RUN BUTTON */}
+            {/* MINIMAP + RUN + WORLD */}
             <div className="fixed top-6 left-6 z-[900] flex flex-col items-center gap-3 pointer-events-auto select-none">
                 <div className="relative w-40 h-40 rounded-full overflow-hidden bg-gradient-to-b from-gray-900/95 to-gray-950/95
                         border-4 border-indigo-600/50 hover:border-indigo-400/80
@@ -569,7 +553,6 @@ function GameContent({
                             ${runEnabled ? 'text-emerald-400' : 'text-gray-400'}`}>
                             {runEnabled ? 'RUN' : 'WALK'}
                         </div>
-                        {/* Energy bar */}
                         <div className="w-12 h-1.5 bg-gray-800 rounded-full overflow-hidden border border-gray-700">
                             <div
                                 className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-300"
@@ -578,6 +561,7 @@ function GameContent({
                         </div>
                     </div>
 
+                    {/* WORLD BUTTON */}
                     <div className="relative w-12 h-12 rounded-full bg-gradient-to-b from-blue-900/90 to-blue-950/90
                           border-3 border-blue-500/50 hover:border-blue-400/80
                           shadow-xl shadow-black/40 hover:scale-110 hover:shadow-blue-500/30
@@ -587,6 +571,10 @@ function GameContent({
                         <div className="absolute -bottom-6 left-1/2 transform -translate-x-1/2 text-[10px] font-medium text-blue-400 group-hover:text-blue-200 whitespace-nowrap">
                             WORLD
                         </div>
+                        <button
+                            className="absolute inset-0 rounded-full opacity-0 hover:opacity-100"
+                            onClick={() => console.log('Open world map - TBD')}
+                        />
                     </div>
                 </div>
             </div>

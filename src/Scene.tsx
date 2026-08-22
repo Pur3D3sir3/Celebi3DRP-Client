@@ -31,6 +31,7 @@ useGLTF.preload("/meshy/walk.glb");
 useGLTF.preload("/meshy/walkstart.glb");
 useGLTF.preload("/meshy/walkstop.glb");
 useGLTF.preload("/meshy/pickup.glb");
+useGLTF.preload("/meshy/run.glb");
 useGLTF.preload("/meshy/male1.glb");
 useGLTF.preload("/meshy/male2.glb");
 useGLTF.preload("/meshy/male2idle.glb");
@@ -88,16 +89,15 @@ export const Scene = forwardRef<{
     const startGltf = useGLTF("/meshy/walkstart.glb");
     const stopGltf = useGLTF("/meshy/walkstop.glb");
     const pickupGltf = useGLTF("/meshy/pickup.glb");
+    const runGltf = useGLTF("/meshy/run.glb");
 
     const male2IdleGltf = useGLTF("/meshy/male2idle.glb");
     const male2WalkGltf = useGLTF("/meshy/male2walk.glb");
     const male2RunGltf = useGLTF("/meshy/male2run.glb");
 
-    // Much more reliable clip picker
     const getAnim = (gltf: any, preferredNames: string[] = []) => {
         if (!gltf?.animations?.length) return null;
 
-        // 1. Try to find by name
         for (const name of preferredNames) {
             const found = gltf.animations.find((clip: THREE.AnimationClip) =>
                 clip.name.toLowerCase().includes(name.toLowerCase())
@@ -105,7 +105,6 @@ export const Scene = forwardRef<{
             if (found) return found;
         }
 
-        // 2. Prefer the longest clip (usually the main loop)
         const sorted = [...gltf.animations].sort((a, b) => b.duration - a.duration);
         return sorted[0] || gltf.animations[0] || null;
     };
@@ -116,8 +115,8 @@ export const Scene = forwardRef<{
         walkstart: getAnim(startGltf, ["start", "walkstart"]),
         stopwalk: getAnim(stopGltf, ["stop", "walkstop"]),
         pickup: getAnim(pickupGltf, ["pickup", "pick"]),
-        run: null as THREE.AnimationClip | null,
-    }), [idleGltf, walkGltf, startGltf, stopGltf, pickupGltf]);
+        run: getAnim(runGltf, ["run", "sprint", "jog", "running"]),
+    }), [idleGltf, walkGltf, startGltf, stopGltf, pickupGltf, runGltf]);
 
     const male2Clips = useMemo(() => ({
         idle: getAnim(male2IdleGltf, ["idle", "stand"]),

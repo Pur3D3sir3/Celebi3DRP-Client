@@ -19,6 +19,9 @@ const CONTINUOUS_RECONCILE_THRESHOLD = 1.6;
 const CONTINUOUS_RECONCILE_ALPHA = 0.04;
 const END_PATH_DISABLE_THRESHOLD = 0.92;
 
+// RuneScape-style turn speed (higher = faster turn)
+const TURN_RATE = 9.5;
+
 type AnimationClips = {
     idle: THREE.AnimationClip | null;
     walkforward: THREE.AnimationClip | null;
@@ -70,6 +73,13 @@ function stripScaleTracks(clip: THREE.AnimationClip | null): THREE.AnimationClip
     return new THREE.AnimationClip(clip.name, clip.duration, filtered);
 }
 
+function shortestAngleDiff(from: number, to: number): number {
+    let diff = to - from;
+    while (diff > Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    return diff;
+}
+
 export function Player({
                            character,
                            clips,
@@ -94,6 +104,8 @@ export function Player({
     currentSpeedRef.current = runEnabled ? RUN_SPEED : WALK_SPEED;
 
     const hasInitialSnapped = useRef(false);
+    const currentYaw = useRef(0);
+    const targetYaw = useRef(0);
 
     const modelUrl = (() => {
         let m = character.model || "/meshy/male1.glb";
@@ -195,7 +207,20 @@ export function Player({
     const lastSimTimeRef = useRef(performance.now());
     const backgroundIntervalRef = useRef<number | null>(null);
 
-    // Hard snap on first spawn / position arrival (kills the spawn slide)
+    // Smoothly rotate the character toward targetYaw
+    const applySmoothTurn = (dt: number) => {
+        if (!group.current) return;
+        const diff = shortestAngleDiff(currentYaw.current, targetYaw.current);
+        if (Math.abs(diff) < 0.001) {
+            currentYaw.current = targetYaw.current;
+        } else {
+            // Exponential ease – feels like RuneScape turning
+            const t = 1 - Math.exp(-TURN_RATE * dt);
+            currentYaw.current += diff * t;
+        }
+        group.current.rotation.y = currentYaw.current;
+    };
+
     useEffect(() => {
         if (!isLocal || !group.current) return;
         if (hasInitialSnapped.current) return;
@@ -208,10 +233,11 @@ export function Player({
             }
             targetPosition.current.set(x, y, z);
             hasInitialSnapped.current = true;
+            currentYaw.current = group.current.rotation.y;
+            targetYaw.current = currentYaw.current;
         }
     }, [isLocal, character.position, localPosRef]);
 
-    // When a new path is set → snap to the first point (RuneScape style)
     useEffect(() => {
         if (!isLocal || !localPath || localPath.length < 2 || !group.current) {
             pathCurve.current = null;
@@ -219,16 +245,20 @@ export function Player({
         }
 
         const points = localPath.map((p) => new THREE.Vector3(...p));
-        // Snap to start of path immediately
-        group.current.position.copy(points[0]);
-        if (localPosRef?.current) {
-            localPosRef.current.copy(points[0]);
-        }
-
+        // Keep current position – do not snap to first point (avoids pop)
+        // Only set path; movement will catch up naturally
         pathCurve.current = new THREE.CatmullRomCurve3(points, false, "centripetal", 0.5);
-        pathProgress.current = 0;
+        pathProgress.current = getClosestProgress(pathCurve.current, group.current.position);
         lastSimTimeRef.current = performance.now();
-    }, [localPath, isLocal, localPosRef]);
+
+        // Set desired facing toward the start of the new path (smooth turn will handle it)
+        if (points.length >= 2) {
+            const dir = new THREE.Vector3().subVectors(points[1], points[0]).normalize();
+            if (dir.lengthSq() > 0.0001) {
+                targetYaw.current = Math.atan2(dir.x, dir.z);
+            }
+        }
+    }, [localPath, isLocal]);
 
     useEffect(() => {
         if (currentState === "pickup") {
@@ -318,7 +348,6 @@ export function Player({
 
         const handleSceneChange = (data: { scene: number; position?: [number, number, number] }) => {
             if (data.position && group.current) {
-                // Hard snap on scene change / teleport
                 group.current.position.set(...data.position);
                 if (localPosRef?.current) localPosRef.current.copy(group.current.position);
                 targetPosition.current.set(...data.position);
@@ -365,7 +394,12 @@ export function Player({
 
                 group.current.position.copy(targetPoint);
                 velocity.current.copy(tangent.multiplyScalar(speed));
-                group.current.lookAt(group.current.position.clone().add(tangent));
+
+                // Smooth turn instead of lookAt
+                if (tangent.lengthSq() > 0.0001) {
+                    targetYaw.current = Math.atan2(tangent.x, tangent.z);
+                }
+                applySmoothTurn(dtSeconds);
 
                 if (localPosRef?.current) {
                     localPosRef.current.copy(group.current.position);
@@ -378,7 +412,6 @@ export function Player({
                     lastUpdateRef.current = now;
                 }
             } else {
-                // Hard stop at destination
                 const endPoint = pathCurve.current.getPointAt(1);
                 group.current.position.copy(endPoint);
                 if (localPosRef?.current) localPosRef.current.copy(endPoint);
@@ -454,12 +487,15 @@ export function Player({
                 const targetPoint = pathCurve.current.getPointAt(pathProgress.current);
                 const tangent = pathCurve.current.getTangentAt(pathProgress.current).normalize();
 
-                // Direct copy – no lerp while following path (RuneScape precision)
                 pos.copy(targetPoint);
                 velocity.current.copy(tangent.multiplyScalar(speed));
-                group.current.lookAt(pos.clone().add(tangent));
 
-                // Only correct large desyncs
+                // Smooth turn – no more snap rotation
+                if (tangent.lengthSq() > 0.0001) {
+                    targetYaw.current = Math.atan2(tangent.x, tangent.z);
+                }
+                applySmoothTurn(dt);
+
                 const serverPos = new THREE.Vector3(...character.position);
                 const currentDesync = pos.distanceTo(serverPos);
 
@@ -489,7 +525,6 @@ export function Player({
                     lastUpdateRef.current = now;
                 }
             } else {
-                // Hard stop
                 const endPoint = pathCurve.current.getPointAt(1);
                 pos.copy(endPoint);
                 if (localPosRef?.current) localPosRef.current.copy(endPoint);
@@ -527,6 +562,12 @@ export function Player({
                     setPendingInteraction(null);
                     setCurrentState("idle");
 
+                    // Face the item smoothly
+                    const faceDir = new THREE.Vector3().subVectors(itemPos, pos).normalize();
+                    if (faceDir.lengthSq() > 0.0001) {
+                        targetYaw.current = Math.atan2(faceDir.x, faceDir.z);
+                    }
+
                     setTimeout(() => {
                         socket.emit(
                             "interact_item",
@@ -539,7 +580,6 @@ export function Player({
 
                                 if (response.status === "ok") {
                                     setCurrentState("pickup");
-                                    group.current.lookAt(itemPos);
                                 } else if (response.status === "too_far") {
                                     onSpeech?.("I'm too far away!");
                                     setCurrentState("idle");
@@ -559,6 +599,9 @@ export function Player({
                 }
             }
         } else if (isLocal) {
+            // Still apply any pending smooth turn while standing
+            applySmoothTurn(dt);
+
             if (pendingInteraction && setPendingInteraction && maxInteractDist) {
                 if (isInteracting.current) return;
                 if (lastInteractedItemRef.current === pendingInteraction.instance_id) {
@@ -588,6 +631,11 @@ export function Player({
                 setPendingInteraction(null);
                 setCurrentState("idle");
 
+                const faceDir = new THREE.Vector3().subVectors(itemPos, pos).normalize();
+                if (faceDir.lengthSq() > 0.0001) {
+                    targetYaw.current = Math.atan2(faceDir.x, faceDir.z);
+                }
+
                 setTimeout(() => {
                     socket.emit(
                         "interact_item",
@@ -600,7 +648,6 @@ export function Player({
 
                             if (response.status === "ok") {
                                 setCurrentState("pickup");
-                                group.current.lookAt(itemPos);
                             } else if (response.status === "too_far") {
                                 onSpeech?.("I'm too far away!");
                                 setCurrentState("idle");
@@ -619,7 +666,6 @@ export function Player({
                 }, 50);
             }
 
-            // Only gentle correction when standing still
             const serverPos = new THREE.Vector3(...character.position);
             const desyncDist = pos.distanceTo(serverPos);
             if (desyncDist > CATCHUP_MIN_DISTANCE) {
@@ -628,14 +674,16 @@ export function Player({
         }
 
         if (!isLocal) {
-            // Remote players – smooth but responsive
             const lerpFactor = 1 - Math.exp(-14 * dt);
             group.current.position.lerp(targetPosition.current, lerpFactor);
 
             const dx = targetPosition.current.x - group.current.position.x;
             const dz = targetPosition.current.z - group.current.position.z;
             if (dx * dx + dz * dz > 0.0004) {
-                group.current.lookAt(targetPosition.current.x, group.current.position.y, targetPosition.current.z);
+                // Smooth remote facing too
+                const desired = Math.atan2(dx, dz);
+                const diff = shortestAngleDiff(group.current.rotation.y, desired);
+                group.current.rotation.y += diff * (1 - Math.exp(-10 * dt));
             }
 
             const distToTarget = group.current.position.distanceTo(targetPosition.current);
@@ -649,7 +697,6 @@ export function Player({
             }
         }
 
-        // Animation state machine
         if (!isPickupLocked) {
             const isMoving = isLocal ? !!pathCurve.current : remoteIsMovingRef.current;
 
@@ -703,7 +750,6 @@ export function Player({
 
         mixer.update(dt);
 
-        // Scale lock
         if (group.current) {
             group.current.scale.set(1, 1, 1);
         }
@@ -729,9 +775,32 @@ export function Player({
         <group ref={group} dispose={null}>
             <primitive object={clone} />
             {speech && (
-                <Billboard position={[0, 2.5, 0]} follow={true} lockX={false} lockY={false} lockZ={false}>
-                    <Html center distanceFactor={10} transform occlude="blending" zIndexRange={[100, 0]}>
-                        <div className="bg-gray-800/90 text-white px-3 py-1.5 rounded-full text-sm shadow-md border border-gray-700/50 whitespace-nowrap">
+                <Billboard position={[0, 2.35, 0]} follow={true}>
+                    <Html
+                        center
+                        style={{
+                            pointerEvents: "none",
+                            userSelect: "none",
+                            whiteSpace: "nowrap",
+                        }}
+                        zIndexRange={[100, 0]}
+                    >
+                        <div
+                            style={{
+                                background: "rgba(20, 20, 28, 0.92)",
+                                color: "#f0f0f5",
+                                padding: "5px 12px",
+                                borderRadius: "9999px",
+                                fontSize: "13px",
+                                fontFamily: "system-ui, -apple-system, sans-serif",
+                                fontWeight: 500,
+                                border: "1px solid rgba(255,255,255,0.12)",
+                                boxShadow: "0 4px 12px rgba(0,0,0,0.45)",
+                                lineHeight: 1.3,
+                                maxWidth: "260px",
+                                textAlign: "center",
+                            }}
+                        >
                             {speech}
                         </div>
                     </Html>
