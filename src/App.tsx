@@ -94,7 +94,7 @@ function App() {
 
     if (screen === "loading") {
         return (
-            <div className="min-h-screen flex items-center justify-center text-gray-400">
+            <div className="min-h-screen flex items-center justify-center text-gray-400 px-4">
                 Loading...
             </div>
         );
@@ -109,7 +109,11 @@ function App() {
                     onSwitch={() => setScreen(screen === "login" ? "register" : "login")}
                 />
             ) : screen === "character_select" ? (
-                <CharacterSelect token={token!} onSelect={handleSelectCharacter} />
+                <CharacterSelect
+                    token={token!}
+                    onSelect={handleSelectCharacter}
+                    onLogout={handleLogout}
+                />
             ) : screen === "hotel" ? (
                 <HotelView
                     character={activeCharacter}
@@ -126,16 +130,19 @@ function App() {
                         <button
                             onClick={() => setScreen("hotel")}
                             className="
-                fixed top-4 right-4 z-[800]
-                flex items-center gap-2 px-5 py-3 rounded-xl
+                fixed top-3 right-3 sm:top-4 sm:right-4 z-[800]
+                flex items-center gap-1.5 sm:gap-2
+                px-3 py-2 sm:px-5 sm:py-3 rounded-xl
                 bg-indigo-950/70 hover:bg-indigo-900/80 backdrop-blur-md
                 border border-indigo-500/50 hover:border-indigo-400
-                text-white font-medium shadow-xl shadow-black/40
+                text-white text-sm sm:text-base font-medium
+                shadow-xl shadow-black/40
                 transition-all duration-200 hover:scale-105 active:scale-95
               "
                         >
-                            <i className="fas fa-home text-lg"></i>
-                            Back to Lobby
+                            <i className="fas fa-home text-base sm:text-lg"></i>
+                            <span className="hidden xs:inline">Back to Lobby</span>
+                            <span className="xs:hidden">Lobby</span>
                         </button>
                     )}
                     <div className="fixed inset-0 w-full h-full overflow-hidden bg-black">
@@ -413,15 +420,15 @@ function GameContent({
           ${!loaderVisible ? 'opacity-0 pointer-events-none' : 'opacity-100'}
         `}
             >
-                <div className="text-3xl md:text-4xl font-bold mb-8 animate-pulse-slow">
+                <div className="text-2xl sm:text-3xl md:text-4xl font-bold mb-6 sm:mb-8 animate-pulse-slow px-4 text-center">
                     {title}
                 </div>
-                <div className="w-80 md:w-96 h-2 bg-gray-800/50 rounded-full overflow-hidden mb-6 relative">
+                <div className="w-64 sm:w-80 md:w-96 h-2 bg-gray-800/50 rounded-full overflow-hidden mb-6 relative">
                     <div
                         className="absolute inset-0 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 animate-loading-bar"
                     />
                 </div>
-                <div className="text-base md:text-lg opacity-80 max-w-md text-center px-6">
+                <div className="text-sm sm:text-base md:text-lg opacity-80 max-w-md text-center px-6">
                     {subtitle}
                 </div>
                 <style>{`
@@ -482,16 +489,19 @@ function GameContent({
                         setInventoryOpen(true);
                     }}
                     className="
-            fixed bottom-4 left-4 z-[800]
-            flex items-center gap-2 px-5 py-3 rounded-xl
+            fixed bottom-3 left-3 sm:bottom-4 sm:left-4 z-[800]
+            flex items-center gap-1.5 sm:gap-2
+            px-3 py-2 sm:px-5 sm:py-3 rounded-xl
             bg-indigo-950/70 hover:bg-indigo-900/80 backdrop-blur-md
             border border-indigo-500/50 hover:border-indigo-400
-            text-white font-medium shadow-xl shadow-black/40
+            text-white text-sm sm:text-base font-medium
+            shadow-xl shadow-black/40
             transition-all duration-200 hover:scale-105 active:scale-95
           "
                 >
-                    <i className="fas fa-toolbox text-lg"></i>
-                    Admin Edit
+                    <i className="fas fa-toolbox text-base sm:text-lg"></i>
+                    <span className="hidden sm:inline">Admin Edit</span>
+                    <span className="sm:hidden">Admin</span>
                 </button>
             )}
 
@@ -517,9 +527,10 @@ function GameContent({
                 />
             )}
 
-            <div className="fixed top-6 left-6 z-[900] flex flex-col items-center gap-3 pointer-events-auto select-none">
-                <div className="relative w-40 h-40 rounded-full overflow-hidden bg-gradient-to-b from-gray-900/95 to-gray-950/95
-                        border-4 border-indigo-600/50 hover:border-indigo-400/80
+            {/* Responsive HUD - left side */}
+            <div className="fixed top-3 left-3 sm:top-6 sm:left-6 z-[900] flex flex-col items-center gap-2 sm:gap-3 pointer-events-auto select-none">
+                <div className="relative w-28 h-28 sm:w-36 sm:h-36 md:w-40 md:h-40 rounded-full overflow-hidden bg-gradient-to-b from-gray-900/95 to-gray-950/95
+                        border-[3px] sm:border-4 border-indigo-600/50 hover:border-indigo-400/80
                         shadow-2xl shadow-black/60 backdrop-blur-lg
                         transition-all duration-300 hover:scale-[1.03] hover:shadow-indigo-600/30
                         cursor-pointer group">
@@ -530,29 +541,29 @@ function GameContent({
                     <div className="absolute inset-0 rounded-full bg-indigo-500/5 blur-xl animate-pulse-slow pointer-events-none" />
                 </div>
 
-                <div className="flex flex-row gap-2 mt-2">
+                <div className="flex flex-row gap-2 sm:gap-3 mt-1 sm:mt-2">
                     <div className="flex flex-col items-center gap-1">
                         <div
-                            className={`relative w-12 h-12 rounded-full transition-all duration-300 group
+                            className={`relative w-10 h-10 sm:w-12 sm:h-12 rounded-full transition-all duration-300 group
                            shadow-xl shadow-black/40 hover:scale-110 hover:shadow-indigo-400/30
-                           cursor-pointer border-3 ${runEnabled
+                           cursor-pointer border-2 sm:border-3 ${runEnabled
                                 ? 'bg-gradient-to-b from-emerald-500/90 to-emerald-600/90 border-emerald-400/80 hover:border-emerald-300/90 shadow-emerald-500/40'
                                 : 'bg-gray-900/90 border-indigo-500/40 hover:border-indigo-400/70 shadow-indigo-500/20'}`}
                             onClick={() => {
                                 if (energy > 5) setRunEnabled(!runEnabled);
                             }}
                         >
-                            <i className={`fas fa-running absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 text-lg
+                            <i className={`fas fa-running absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 text-sm sm:text-lg
                            ${runEnabled ? 'text-emerald-900 drop-shadow-sm' : 'text-indigo-300 group-hover:text-indigo-100'}`} />
                             {runEnabled && (
                                 <div className="absolute inset-0 rounded-full bg-emerald-400/30 blur animate-ping-slow" />
                             )}
                         </div>
-                        <div className={`text-[10px] font-medium whitespace-nowrap
+                        <div className={`text-[9px] sm:text-[10px] font-medium whitespace-nowrap
                             ${runEnabled ? 'text-emerald-400' : 'text-gray-400'}`}>
                             {runEnabled ? 'RUN' : 'WALK'}
                         </div>
-                        <div className="w-12 h-1.5 bg-gray-800 rounded-full overflow-hidden border border-gray-700">
+                        <div className="w-10 sm:w-12 h-1.5 bg-gray-800 rounded-full overflow-hidden border border-gray-700">
                             <div
                                 className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-300"
                                 style={{ width: `${energy}%` }}
@@ -560,13 +571,13 @@ function GameContent({
                         </div>
                     </div>
 
-                    <div className="relative w-12 h-12 rounded-full bg-gradient-to-b from-blue-900/90 to-blue-950/90
-                          border-3 border-blue-500/50 hover:border-blue-400/80
+                    <div className="relative w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-gradient-to-b from-blue-900/90 to-blue-950/90
+                          border-2 sm:border-3 border-blue-500/50 hover:border-blue-400/80
                           shadow-xl shadow-black/40 hover:scale-110 hover:shadow-blue-500/30
                           transition-all duration-300 cursor-pointer group">
-                        <i className="fas fa-globe absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 text-lg text-blue-300 group-hover:text-blue-100 drop-shadow-sm" />
+                        <i className="fas fa-globe absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 text-sm sm:text-lg text-blue-300 group-hover:text-blue-100 drop-shadow-sm" />
                         <div className="absolute inset-0 rounded-full bg-blue-500/20 blur -m-1" />
-                        <div className="absolute -bottom-6 left-1/2 transform -translate-x-1/2 text-[10px] font-medium text-blue-400 group-hover:text-blue-200 whitespace-nowrap">
+                        <div className="absolute -bottom-5 sm:-bottom-6 left-1/2 transform -translate-x-1/2 text-[9px] sm:text-[10px] font-medium text-blue-400 group-hover:text-blue-200 whitespace-nowrap">
                             WORLD
                         </div>
                         <button
@@ -617,16 +628,24 @@ function ContextMenuComponent({ menu, setMenu, sceneRef }: { menu: NonNullable<C
         }
     }
 
+    // Keep context menu on screen on mobile
+    const menuStyle: React.CSSProperties = {
+        position: 'absolute',
+        left: Math.min(x, window.innerWidth - 180),
+        top: Math.min(y, window.innerHeight - 120),
+        zIndex: 2000,
+    };
+
     return (
         <div
-            style={{ position: 'absolute', left: x, top: y, zIndex: 2000 }}
-            className="bg-gray-900 text-white border border-gray-700 rounded shadow-lg min-w-[150px]"
+            style={menuStyle}
+            className="bg-gray-900 text-white border border-gray-700 rounded-lg shadow-lg min-w-[150px] max-w-[90vw]"
         >
             <ul className="py-1">
                 {options.map((opt, i) => (
                     <li
                         key={i}
-                        className="px-4 py-2 hover:bg-indigo-600 cursor-pointer transition-colors"
+                        className="px-4 py-2.5 hover:bg-indigo-600 cursor-pointer transition-colors text-sm"
                         onClick={opt.onClick}
                     >
                         {opt.label}

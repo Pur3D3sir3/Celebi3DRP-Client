@@ -28,8 +28,6 @@ interface SceneProps {
 
 useGLTF.preload("/meshy/idle.glb");
 useGLTF.preload("/meshy/walk.glb");
-useGLTF.preload("/meshy/walkstart.glb");
-useGLTF.preload("/meshy/walkstop.glb");
 useGLTF.preload("/meshy/pickup.glb");
 useGLTF.preload("/meshy/run.glb");
 useGLTF.preload("/meshy/male1.glb");
@@ -37,6 +35,7 @@ useGLTF.preload("/meshy/male2.glb");
 useGLTF.preload("/meshy/male2idle.glb");
 useGLTF.preload("/meshy/male2walk.glb");
 useGLTF.preload("/meshy/male2run.glb");
+useGLTF.preload("/meshy/male2pickup.glb");
 useGLTF.preload("/items/soda_can.glb");
 useGLTF.preload("/items/rock.glb");
 
@@ -96,14 +95,13 @@ export const Scene = forwardRef<{
 
     const idleGltf = useGLTF("/meshy/idle.glb");
     const walkGltf = useGLTF("/meshy/walk.glb");
-    const startGltf = useGLTF("/meshy/walkstart.glb");
-    const stopGltf = useGLTF("/meshy/walkstop.glb");
     const pickupGltf = useGLTF("/meshy/pickup.glb");
     const runGltf = useGLTF("/meshy/run.glb");
 
     const male2IdleGltf = useGLTF("/meshy/male2idle.glb");
     const male2WalkGltf = useGLTF("/meshy/male2walk.glb");
     const male2RunGltf = useGLTF("/meshy/male2run.glb");
+    const male2PickupGltf = useGLTF("/meshy/male2pickup.glb");
 
     const getAnim = (gltf: any, preferredNames: string[] = []) => {
         if (!gltf?.animations?.length) return null;
@@ -122,20 +120,16 @@ export const Scene = forwardRef<{
     const male1Clips = useMemo(() => ({
         idle: getAnim(idleGltf, ["idle", "stand"]),
         walkforward: getAnim(walkGltf, ["walk", "forward"]),
-        walkstart: getAnim(startGltf, ["start", "walkstart"]),
-        stopwalk: getAnim(stopGltf, ["stop", "walkstop"]),
         pickup: getAnim(pickupGltf, ["pickup", "pick"]),
         run: getAnim(runGltf, ["run", "sprint", "jog", "running"]),
-    }), [idleGltf, walkGltf, startGltf, stopGltf, pickupGltf, runGltf]);
+    }), [idleGltf, walkGltf, pickupGltf, runGltf]);
 
     const male2Clips = useMemo(() => ({
         idle: getAnim(male2IdleGltf, ["idle", "stand"]),
         walkforward: getAnim(male2WalkGltf, ["walk", "forward"]),
-        walkstart: getAnim(male2WalkGltf, ["walk", "forward"]),
-        stopwalk: null as THREE.AnimationClip | null,
-        pickup: getAnim(pickupGltf, ["pickup", "pick"]),
+        pickup: getAnim(male2PickupGltf, ["pickup", "pick"]),
         run: getAnim(male2RunGltf, ["run", "sprint", "jog", "running"]),
-    }), [male2IdleGltf, male2WalkGltf, male2RunGltf, pickupGltf]);
+    }), [male2IdleGltf, male2WalkGltf, male2RunGltf, male2PickupGltf]);
 
     useEffect(() => {
         setLocalPath([]);
@@ -520,7 +514,6 @@ export const Scene = forwardRef<{
         );
         state.camera.lookAt(lookTarget);
 
-        // Expire click markers
         const now = performance.now();
         setClickMarkers((prev) => {
             const next = prev.filter((m) => now - m.born < 700);
@@ -661,7 +654,6 @@ export const Scene = forwardRef<{
                 <meshStandardMaterial color={sceneConfig.floorColor} />
             </mesh>
 
-            {/* RuneScape-style click markers */}
             {clickMarkers.map((m) => {
                 const age = Math.min(1, (performance.now() - m.born) / 700);
                 const scale = 0.35 + age * 0.95;

@@ -7,13 +7,13 @@ import { Billboard, Html } from "@react-three/drei";
 import { Character } from "../lib/types";
 import { useSocket } from "../lib/constants";
 
-// Tuned for animation match + RuneScape-style feel
 const WALK_SPEED = 2.85;
 const RUN_SPEED = 5.15;
 
 const UPDATE_INTERVAL = 0.14;
 const TRANSITION_DURATION = 0.18;
-const IDLE_FALLBACK_WEIGHT = 0.2;
+const PICKUP_TO_IDLE_BLEND = 0.32;
+const IDLE_FALLBACK_WEIGHT = 0.12;
 const CATCHUP_MIN_DISTANCE = 0.35;
 const RECONCILE_LERP = 0.12;
 const MIN_CORRECTION_DIST = 1.1;
@@ -21,14 +21,13 @@ const CONTINUOUS_RECONCILE_THRESHOLD = 1.6;
 const CONTINUOUS_RECONCILE_ALPHA = 0.04;
 const END_PATH_DISABLE_THRESHOLD = 0.92;
 const TURN_RATE = 9.5;
+const PICKUP_TIMESCALE = 1.0;
 
 type AnimationClips = {
     idle: THREE.AnimationClip | null;
     walkforward: THREE.AnimationClip | null;
-    walkstart: THREE.AnimationClip | null;
-    stopwalk: THREE.AnimationClip | null;
     pickup: THREE.AnimationClip | null;
-    run?: THREE.AnimationClip | null;
+    run: THREE.AnimationClip | null;
 };
 
 type PlayerProps = {
@@ -46,7 +45,7 @@ type PlayerProps = {
     onMovingChange?: (moving: boolean) => void;
 };
 
-type AnimState = "idle" | "walkstart" | "walkforward" | "stopwalk" | "pickup" | "run";
+type AnimState = "idle" | "walkforward" | "pickup" | "run";
 
 function getClosestProgress(curve: THREE.CatmullRomCurve3, point: THREE.Vector3, samples = 48): number {
     let closest = 0;
@@ -136,14 +135,6 @@ export function Player({
             acts.idle = idleAction;
         }
 
-        const walkstartClip = stripScaleTracks(clips.walkstart);
-        if (walkstartClip) {
-            const startAction = mixer.clipAction(walkstartClip);
-            startAction.setLoop(THREE.LoopOnce, 1);
-            startAction.clampWhenFinished = false;
-            acts.walkstart = startAction;
-        }
-
         const walkforwardClip = stripScaleTracks(clips.walkforward);
         if (walkforwardClip) {
             const forwardAction = mixer.clipAction(walkforwardClip);
@@ -152,23 +143,16 @@ export function Player({
             acts.walkforward = forwardAction;
         }
 
-        const stopwalkClip = stripScaleTracks(clips.stopwalk);
-        if (stopwalkClip) {
-            const stopAction = mixer.clipAction(stopwalkClip);
-            stopAction.setLoop(THREE.LoopOnce, 1);
-            stopAction.clampWhenFinished = false;
-            acts.stopwalk = stopAction;
-        }
-
         const pickupClip = stripScaleTracks(clips.pickup);
         if (pickupClip) {
             const pickupAction = mixer.clipAction(pickupClip);
             pickupAction.setLoop(THREE.LoopOnce, 1);
-            pickupAction.clampWhenFinished = false;
+            pickupAction.clampWhenFinished = true;
+            pickupAction.timeScale = PICKUP_TIMESCALE;
             acts.pickup = pickupAction;
         }
 
-        const runClip = stripScaleTracks(clips.run ?? null);
+        const runClip = stripScaleTracks(clips.run);
         if (runClip) {
             const runAction = mixer.clipAction(runClip);
             runAction.setLoop(THREE.LoopRepeat, Infinity);
@@ -180,18 +164,18 @@ export function Player({
     }, [mixer, clips]);
 
     useEffect(() => {
-        // Animation playback rates tuned to the new movement speeds
         if (actions.walkforward) {
             actions.walkforward.timeScale = runEnabled ? 1.75 : 1.12;
         }
-        if (actions.walkstart) actions.walkstart.timeScale = 1.1;
-        if (actions.stopwalk) actions.stopwalk.timeScale = 1.1;
         if (actions.run) actions.run.timeScale = 1.15;
+        if (actions.pickup) actions.pickup.timeScale = PICKUP_TIMESCALE;
     }, [actions, runEnabled]);
 
     const [currentState, setCurrentState] = useState<AnimState>("idle");
     const [isPickupLocked, setIsPickupLocked] = useState(false);
     const prevActionRef = useRef<THREE.AnimationAction | null>(null);
+    const prevStateRef = useRef<AnimState>("idle");
+    const pickupBlendStartedRef = useRef(false);
 
     const lastServerUpdate = useRef(Date.now());
     const targetPosition = useRef(new THREE.Vector3(...character.position));
@@ -207,6 +191,18 @@ export function Player({
 
     const lastSimTimeRef = useRef(performance.now());
     const backgroundIntervalRef = useRef<number | null>(null);
+
+    const cancelPickupForMovement = () => {
+        if (currentState === "pickup" || isPickupLocked) {
+            setIsPickupLocked(false);
+            isInteracting.current = false;
+            pickupBlendStartedRef.current = false;
+            if (actions.pickup) {
+                actions.pickup.fadeOut(0.12);
+                actions.pickup.stop();
+            }
+        }
+    };
 
     const applySmoothTurn = (dt: number) => {
         if (!group.current) return;
@@ -251,6 +247,8 @@ export function Player({
             return;
         }
 
+        cancelPickupForMovement();
+
         const points = localPath.map((p) => new THREE.Vector3(...p));
         pathCurve.current = new THREE.CatmullRomCurve3(points, false, "centripetal", 0.5);
         pathProgress.current = getClosestProgress(pathCurve.current, group.current.position);
@@ -262,25 +260,32 @@ export function Player({
                 targetYaw.current = Math.atan2(dir.x, dir.z);
             }
         }
+
+        if (runEnabled && actions.run) {
+            setCurrentState("run");
+        } else {
+            setCurrentState("walkforward");
+        }
     }, [localPath, isLocal]);
 
     useEffect(() => {
         if (currentState === "pickup") {
             setIsPickupLocked(true);
-            const timer = setTimeout(() => setIsPickupLocked(false), 2000);
+            pickupBlendStartedRef.current = false;
+            const clip = actions.pickup?.getClip();
+            const durationMs = clip
+                ? Math.ceil((clip.duration / PICKUP_TIMESCALE) * 1000) + 120
+                : 1200;
+            const timer = setTimeout(() => setIsPickupLocked(false), durationMs);
             return () => clearTimeout(timer);
         }
-    }, [currentState]);
+    }, [currentState, actions.pickup]);
 
     useEffect(() => {
         if (actions.idle) {
             actions.idle.reset().play();
             actions.idle.setEffectiveWeight(1.0);
             actions.idle.time = Math.random() * (clips.idle?.duration || 0);
-        }
-        if (actions.walkstart) {
-            actions.walkstart.play();
-            actions.walkstart.setEffectiveWeight(0.0);
         }
     }, [actions, clips.idle?.duration]);
 
@@ -289,29 +294,49 @@ export function Player({
         if (!action) return;
 
         const prev = prevActionRef.current;
+        const fromPickup = prevStateRef.current === "pickup" && currentState === "idle";
+        const blendDuration = fromPickup ? PICKUP_TO_IDLE_BLEND : TRANSITION_DURATION;
 
         if (actions.idle && currentState !== "idle") {
             actions.idle.setEffectiveWeight(IDLE_FALLBACK_WEIGHT);
             if (!actions.idle.isRunning()) actions.idle.play();
-        } else if (actions.idle) {
+        } else if (actions.idle && currentState === "idle") {
             actions.idle.setEffectiveWeight(1.0);
+            if (!actions.idle.isRunning()) {
+                actions.idle.play();
+            }
         }
 
         if (prev && prev !== action) {
-            action.reset();
-            action.time = 0.04;
-            action.crossFadeFrom(prev, TRANSITION_DURATION, true);
+            if (fromPickup) {
+                action.enabled = true;
+                action.setEffectiveWeight(0);
+                action.play();
+                action.crossFadeFrom(prev, blendDuration, true);
+                action.setEffectiveWeight(1.0);
+            } else {
+                action.reset();
+                action.time = 0.03;
+                if (currentState === "pickup") {
+                    action.timeScale = PICKUP_TIMESCALE;
+                }
+                action.crossFadeFrom(prev, blendDuration, true);
+                action.setEffectiveWeight(1.0);
+                action.play();
+            }
         } else {
-            action.fadeIn(TRANSITION_DURATION);
+            action.fadeIn(blendDuration);
+            action.setEffectiveWeight(1.0);
+            action.play();
         }
 
-        action.setEffectiveWeight(1.0);
-        action.play();
-
         prevActionRef.current = action;
+        prevStateRef.current = currentState;
 
         return () => {
-            if (action) action.fadeOut(TRANSITION_DURATION);
+            if (action && currentState !== "idle") {
+                action.fadeOut(blendDuration);
+            }
         };
     }, [currentState, actions]);
 
@@ -319,6 +344,8 @@ export function Player({
         if (!isLocal) return;
         const isMoving = !!pathCurve.current;
         if (!isMoving) return;
+
+        cancelPickupForMovement();
 
         if (runEnabled) {
             if (actions.run) {
@@ -358,6 +385,9 @@ export function Player({
                 pathCurve.current = null;
                 pathProgress.current = 0;
                 velocity.current.set(0, 0, 0);
+                setIsPickupLocked(false);
+                isInteracting.current = false;
+                pickupBlendStartedRef.current = false;
                 setCurrentState("idle");
                 if (actions.idle) {
                     actions.idle.reset().play();
@@ -478,6 +508,15 @@ export function Player({
         }
 
         if (isLocal && pathCurve.current) {
+            if (currentState === "pickup" || isPickupLocked) {
+                cancelPickupForMovement();
+                if (runEnabled && actions.run) {
+                    setCurrentState("run");
+                } else {
+                    setCurrentState("walkforward");
+                }
+            }
+
             const curveLength = pathCurve.current.getLength();
             const step = computeStep(curveLength, speed, dt);
             pathProgress.current = Math.min(pathProgress.current + step, 1);
@@ -558,7 +597,6 @@ export function Player({
 
                     const interactionData = { ...pendingInteraction };
                     setPendingInteraction(null);
-                    setCurrentState("idle");
 
                     const faceDir = new THREE.Vector3().subVectors(itemPos, pos).normalize();
                     if (faceDir.lengthSq() > 0.0001) {
@@ -576,23 +614,25 @@ export function Player({
                                 isInteracting.current = false;
 
                                 if (response.status === "ok") {
-                                    setCurrentState("pickup");
+                                    if (!pathCurve.current) {
+                                        setCurrentState("pickup");
+                                    }
                                 } else if (response.status === "too_far") {
                                     onSpeech?.("I'm too far away!");
-                                    setCurrentState("idle");
+                                    if (!pathCurve.current) setCurrentState("idle");
                                 } else {
                                     onSpeech?.("Couldn't pick up the item.");
-                                    setCurrentState("idle");
+                                    if (!pathCurve.current) setCurrentState("idle");
                                 }
 
                                 setTimeout(() => {
                                     if (lastInteractedItemRef.current === interactionData.instance_id) {
                                         lastInteractedItemRef.current = null;
                                     }
-                                }, 1200);
+                                }, 800);
                             }
                         );
-                    }, 50);
+                    }, 30);
                 }
             }
         } else if (isLocal) {
@@ -625,7 +665,6 @@ export function Player({
 
                 const interactionData = { ...pendingInteraction };
                 setPendingInteraction(null);
-                setCurrentState("idle");
 
                 const faceDir = new THREE.Vector3().subVectors(itemPos, pos).normalize();
                 if (faceDir.lengthSq() > 0.0001) {
@@ -643,23 +682,25 @@ export function Player({
                             isInteracting.current = false;
 
                             if (response.status === "ok") {
-                                setCurrentState("pickup");
+                                if (!pathCurve.current) {
+                                    setCurrentState("pickup");
+                                }
                             } else if (response.status === "too_far") {
                                 onSpeech?.("I'm too far away!");
-                                setCurrentState("idle");
+                                if (!pathCurve.current) setCurrentState("idle");
                             } else {
                                 onSpeech?.("Couldn't pick up the item.");
-                                setCurrentState("idle");
+                                if (!pathCurve.current) setCurrentState("idle");
                             }
 
                             setTimeout(() => {
                                 if (lastInteractedItemRef.current === interactionData.instance_id) {
                                     lastInteractedItemRef.current = null;
                                 }
-                            }, 1200);
+                            }, 800);
                         }
                     );
-                }, 50);
+                }, 30);
             }
 
             const serverPos = new THREE.Vector3(...character.position);
@@ -692,55 +733,36 @@ export function Player({
             }
         }
 
-        if (!isPickupLocked) {
-            const isMoving = isLocal ? !!pathCurve.current : remoteIsMovingRef.current;
+        const isMoving = isLocal ? !!pathCurve.current : remoteIsMovingRef.current;
 
-            if (isMoving) {
-                if (runEnabled) {
-                    if (actions.run && currentState !== "run") {
-                        setCurrentState("run");
-                    } else if (!actions.run && currentState !== "walkforward") {
-                        setCurrentState("walkforward");
-                    }
-                } else {
-                    if (currentState === "idle" || currentState === "stopwalk" || currentState === "run") {
-                        if (actions.walkstart) {
-                            setCurrentState("walkstart");
-                        } else {
-                            setCurrentState("walkforward");
-                        }
-                    } else if (
-                        currentState === "walkstart" &&
-                        actions.walkstart &&
-                        actions.walkstart.time >= actions.walkstart.getClip().duration * 0.7
-                    ) {
-                        setCurrentState("walkforward");
-                    }
-                }
+        if (isMoving) {
+            if (currentState === "pickup" || isPickupLocked) {
+                cancelPickupForMovement();
+            }
+            if (runEnabled && actions.run) {
+                if (currentState !== "run") setCurrentState("run");
             } else {
-                if (currentState === "walkforward" || currentState === "walkstart" || currentState === "run") {
-                    if (actions.stopwalk) {
-                        setCurrentState("stopwalk");
-                    } else {
-                        setCurrentState("idle");
-                    }
-                } else if (
-                    currentState === "stopwalk" &&
-                    actions.stopwalk &&
-                    actions.stopwalk.time >= actions.stopwalk.getClip().duration * 0.7
-                ) {
-                    setCurrentState("idle");
-                }
+                if (currentState !== "walkforward") setCurrentState("walkforward");
+            }
+        } else if (!isPickupLocked) {
+            if (currentState === "walkforward" || currentState === "run") {
+                setCurrentState("idle");
             }
         }
 
         if (
             currentState === "pickup" &&
             actions.pickup &&
-            actions.pickup.time >= actions.pickup.getClip().duration - 0.15
+            !pathCurve.current &&
+            !pickupBlendStartedRef.current
         ) {
-            setCurrentState("idle");
-            setIsPickupLocked(false);
+            const clip = actions.pickup.getClip();
+            const blendStart = Math.max(0, clip.duration - PICKUP_TO_IDLE_BLEND - 0.05);
+            if (actions.pickup.time >= blendStart) {
+                pickupBlendStartedRef.current = true;
+                setCurrentState("idle");
+                setIsPickupLocked(false);
+            }
         }
 
         mixer.update(dt);
