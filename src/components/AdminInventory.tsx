@@ -81,13 +81,43 @@ export default function AdminInventory({
     const dragOffset = useRef({ x: 0, y: 0 });
     const inspectorRef = useRef<HTMLDivElement>(null);
 
+    // Live values driven by the selected item + TransformControls
+    const [liveY, setLiveY] = useState(0);
+    const [liveRot, setLiveRot] = useState(0);
+    const [liveScale, setLiveScale] = useState(1);
+
     const selectedItem = sceneItems.find((i) => i.instance_id === selectedItemId);
+
+    // Sync live values whenever selection changes
+    useEffect(() => {
+        if (!selectedItem) return;
+        setLiveY(selectedItem.pos_y || 0);
+        setLiveRot((selectedItem.rotation_y || 0) * (180 / Math.PI));
+        setLiveScale(selectedItem.scale || 1);
+    }, [selectedItemId, selectedItem]);
+
+    // Keep live values in sync while the gizmo is being used
+    useEffect(() => {
+        if (!selectedItemId || !transformControls.current) return;
+
+        const tc = transformControls.current;
+        const onChange = () => {
+            const obj = tc.object;
+            if (!obj) return;
+            setLiveY(obj.position.y);
+            setLiveRot(obj.rotation.y * (180 / Math.PI));
+            setLiveScale(obj.scale.x);
+        };
+
+        tc.addEventListener("objectChange", onChange);
+        return () => tc.removeEventListener("objectChange", onChange);
+    }, [selectedItemId, transformControls]);
 
     const debouncedUpdate = useMemo(
         () =>
             _.debounce((data: any) => {
                 socket.emit("admin_update_item", data);
-            }, 280),
+            }, 220),
         [socket]
     );
 
@@ -110,18 +140,16 @@ export default function AdminInventory({
         setPreviewItem(item);
     };
 
+    // Drag the inspector panel
     useEffect(() => {
         if (!isDragging) return;
-
         const onMove = (e: MouseEvent) => {
             setInspectorPos({
                 x: e.clientX - dragOffset.current.x,
                 y: e.clientY - dragOffset.current.y,
             });
         };
-
         const onUp = () => setIsDragging(false);
-
         window.addEventListener("mousemove", onMove);
         window.addEventListener("mouseup", onUp);
         return () => {
@@ -144,7 +172,7 @@ export default function AdminInventory({
         if (selectedItem && inspectorPos.x === 0 && inspectorPos.y === 0) {
             setInspectorPos({
                 x: Math.max(20, window.innerWidth / 2 - 170),
-                y: Math.max(20, window.innerHeight - 320),
+                y: Math.max(20, window.innerHeight - 340),
             });
         }
     }, [selectedItem]);
@@ -153,6 +181,7 @@ export default function AdminInventory({
 
     return (
         <>
+            {/* Catalog panel */}
             <div className="fixed top-0 right-0 bottom-0 z-[9000] w-[340px] sm:w-[360px] flex flex-col bg-[#0e0e14]/95 border-l border-indigo-500/40 shadow-2xl shadow-black/60 backdrop-blur-xl">
                 <div className="flex items-center justify-between px-4 py-3 border-b border-indigo-500/30 bg-indigo-950/50">
                     <div className="flex items-center gap-2.5">
@@ -264,6 +293,7 @@ export default function AdminInventory({
                 </div>
             </div>
 
+            {/* Draggable Inspector */}
             {selectedItem && (
                 <div
                     ref={inspectorRef}
@@ -320,59 +350,68 @@ export default function AdminInventory({
                             <div>
                                 <div className="flex justify-between text-[10px] text-gray-400 mb-1">
                                     <span>Height</span>
+                                    <span className="text-indigo-300">{liveY.toFixed(2)}</span>
                                 </div>
                                 <input
                                     type="range"
                                     min="-5"
                                     max="10"
-                                    step="0.1"
-                                    defaultValue={selectedItem.pos_y || 0}
+                                    step="0.05"
+                                    value={liveY}
                                     onChange={(e) => {
                                         const val = parseFloat(e.target.value);
+                                        setLiveY(val);
                                         if (transformControls.current?.object) {
                                             transformControls.current.object.position.y = val;
-                                            debouncedUpdate({ instance_id: selectedItemId, pos_y: val });
                                         }
+                                        debouncedUpdate({ instance_id: selectedItemId, pos_y: val });
                                     }}
                                     className="w-full accent-indigo-500 h-1.5"
                                 />
                             </div>
+
                             <div>
                                 <div className="flex justify-between text-[10px] text-gray-400 mb-1">
                                     <span>Rotation</span>
+                                    <span className="text-indigo-300">{Math.round(liveRot)}°</span>
                                 </div>
                                 <input
                                     type="range"
                                     min="0"
                                     max="360"
                                     step="1"
-                                    defaultValue={(selectedItem.rotation_y || 0) * (180 / Math.PI)}
+                                    value={liveRot}
                                     onChange={(e) => {
-                                        const val = parseFloat(e.target.value) * (Math.PI / 180);
+                                        const deg = parseFloat(e.target.value);
+                                        const rad = deg * (Math.PI / 180);
+                                        setLiveRot(deg);
                                         if (transformControls.current?.object) {
-                                            transformControls.current.object.rotation.y = val;
-                                            debouncedUpdate({ instance_id: selectedItemId, rotation_y: val });
+                                            transformControls.current.object.rotation.y = rad;
                                         }
+                                        debouncedUpdate({ instance_id: selectedItemId, rotation_y: rad });
                                     }}
                                     className="w-full accent-indigo-500 h-1.5"
                                 />
                             </div>
+
                             <div>
                                 <div className="flex justify-between text-[10px] text-gray-400 mb-1">
                                     <span>Scale</span>
+                                    <span className="text-indigo-300">{liveScale.toFixed(2)}</span>
                                 </div>
                                 <input
                                     type="range"
-                                    min="0.1"
+                                    min="0.15"
                                     max="5"
                                     step="0.05"
-                                    defaultValue={selectedItem.scale || 1}
+                                    value={liveScale}
                                     onChange={(e) => {
                                         const val = parseFloat(e.target.value);
+                                        setLiveScale(val);
                                         if (transformControls.current?.object) {
                                             transformControls.current.object.scale.set(val, val, val);
-                                            debouncedUpdate({ instance_id: selectedItemId, scale: val });
                                         }
+                                        debouncedUpdate({ instance_id: selectedItemId, scale: val });
                                     }}
                                     className="w-full accent-indigo-500 h-1.5"
                                 />

@@ -190,6 +190,23 @@ function GameContent({
     const [energy, setEnergy] = useState(100);
     const minimapCanvasRef = useRef<HTMLCanvasElement>(null);
     const isMovingRef = useRef(false);
+    const [floorColor, setFloorColor] = useState("#70543E");
+
+    useEffect(() => {
+        let cancelled = false;
+        axios.get(`/scene/${currentScene}`)
+            .then((res) => {
+                if (!cancelled && res.data?.scene?.floor_color) {
+                    setFloorColor(res.data.scene.floor_color);
+                }
+            })
+            .catch(() => {
+                if (!cancelled) {
+                    setFloorColor(currentScene === 2 ? "#4A4A4A" : "#70543E");
+                }
+            });
+        return () => { cancelled = true; };
+    }, [currentScene]);
 
     useEffect(() => {
         const interval = setInterval(() => {
@@ -235,14 +252,6 @@ function GameContent({
         });
     };
 
-    const getFloorColor = (scene: number): string => {
-        switch (scene) {
-            case 1: return '#70543E';
-            case 2: return '#4A4A4A';
-            default: return '#4a3a2e';
-        }
-    };
-
     useEffect(() => {
         const canvas = minimapCanvasRef.current;
         if (!canvas) return;
@@ -250,7 +259,6 @@ function GameContent({
         if (!ctx) return;
         let animationFrameId: number;
 
-        const floorColor = getFloorColor(currentScene);
         const darkenColor = (hex: string, factor: number): string => {
             const color = hex.replace('#', '');
             const r = Math.floor(parseInt(color.substr(0, 2), 16) * factor);
@@ -402,10 +410,8 @@ function GameContent({
 
         drawMinimap();
         return () => cancelAnimationFrame(animationFrameId);
-    }, [sceneItems, characters, socket.id, sceneRef, currentScene]);
+    }, [sceneItems, characters, socket.id, sceneRef, currentScene, floorColor]);
 
-    // Only show the full black loader on the very first enter into the world.
-    // Scene changes no longer trigger it — camera, neighbors and player stay live.
     if (isInitialLoading || !dataReceived || loaderVisible) {
         let title = "Entering Velvet Horizon";
         let subtitle = "Connecting • Loading players & world";
@@ -529,7 +535,6 @@ function GameContent({
                 />
             )}
 
-            {/* Responsive HUD - left side */}
             <div className="fixed top-3 left-3 sm:top-6 sm:left-6 z-[900] flex flex-col items-center gap-2 sm:gap-3 pointer-events-auto select-none">
                 <div className="relative w-28 h-28 sm:w-36 sm:h-36 md:w-40 md:h-40 rounded-full overflow-hidden bg-gradient-to-b from-gray-900/95 to-gray-950/95
                         border-[3px] sm:border-4 border-indigo-600/50 hover:border-indigo-400/80
@@ -630,7 +635,6 @@ function ContextMenuComponent({ menu, setMenu, sceneRef }: { menu: NonNullable<C
         }
     }
 
-    // Keep context menu on screen on mobile
     const menuStyle: React.CSSProperties = {
         position: 'absolute',
         left: Math.min(x, window.innerWidth - 180),

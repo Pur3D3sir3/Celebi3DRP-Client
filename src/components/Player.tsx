@@ -24,6 +24,9 @@ const TURN_RATE = 9.5;
 const PICKUP_TIMESCALE = 1.0;
 const TELEPORT_LOCK_MS = 650;
 
+// Pulls the character slightly into the surface so feet plant instead of float
+const GROUND_OFFSET = 0.028;
+
 type AnimationClips = {
     idle: THREE.AnimationClip | null;
     walkforward: THREE.AnimationClip | null;
@@ -239,7 +242,7 @@ export function Player({
 
         for (const hit of hits) {
             if (hit.object.userData?.isWalkableGround) {
-                pos.y = hit.point.y;
+                pos.y = hit.point.y - GROUND_OFFSET;
                 break;
             }
         }

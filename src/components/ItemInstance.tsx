@@ -39,14 +39,15 @@ export function ItemInstance({
                 }
             }
         });
-        clone.name = `item-${instance_id}`;
-        clone.userData = { instance_id, isWalkableGround: isWalkable };
         return clone;
-    }, [scene, instance_id, isWalkable]);
+    }, [scene, isWalkable]);
+
+    const finalY = position[1] + (isWalkable ? 0.018 : 0);
 
     return (
         <group
-            position={position}
+            name={instance_id != null ? `item-${instance_id}` : undefined}
+            position={[position[0], finalY, position[2]]}
             rotation-y={rotationY}
             scale={scale}
             dispose={null}

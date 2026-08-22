@@ -6,7 +6,7 @@ import { NeighborScene } from "./components/NeighborScene";
 import { useSocket } from "./lib/constants";
 import * as THREE from "three";
 import { useFrame, useThree } from "@react-three/fiber";
-import { Character, SceneItem } from "./lib/types";
+import { Character, SceneItem, SceneConfig } from "./lib/types";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls";
 import { OrbitControls } from "@react-three/drei";
 import { useDayNight } from "./lib/useDayNight";
@@ -75,6 +75,7 @@ type NeighborData = {
     offset: [number, number, number];
     items: SceneItem[];
     floorColor: string;
+    planeSize: [number, number];
 };
 
 const FALLBACK_TELEPORTS: TeleportLink[] = [
@@ -84,7 +85,7 @@ const FALLBACK_TELEPORTS: TeleportLink[] = [
 
 const NEIGHBOR_GAP = 5;
 
-function getFloorColor(sceneId: number): string {
+function getFallbackFloorColor(sceneId: number): string {
     switch (sceneId) {
         case 1:
             return "#70543E";
@@ -147,6 +148,18 @@ export const Scene = forwardRef<
         const [neighborOpacity, setNeighborOpacity] = useState(1);
         const neighborOpacityTarget = useRef(1);
 
+        const [sceneConfig, setSceneConfig] = useState<{
+            planeSize: [number, number];
+            floorColor: string;
+            hasSky: boolean;
+            name: string;
+        }>({
+            planeSize: [30, 30],
+            floorColor: "#70543E",
+            hasSky: true,
+            name: "Scene",
+        });
+
         const itemsGroup = useRef<THREE.Group>(null!);
         const orbitControls = useRef<any>(null!);
         const { scene, gl, camera } = useThree();
@@ -165,7 +178,7 @@ export const Scene = forwardRef<
         const cellSize = 0.5;
         const maxInteractDist = 1.5;
         const { sunElevation, isDay } = useDayNight();
-        const hasSky = currentScene === 1 || currentScene === 2;
+        const hasSky = sceneConfig.hasSky;
         useAmbientAudio({ hasSky });
 
         const idleGltf = useGLTF("/meshy/idle.glb");
@@ -228,6 +241,40 @@ export const Scene = forwardRef<
         useEffect(() => {
             let cancelled = false;
 
+            const loadSceneConfig = async () => {
+                try {
+                    const res = await axios.get(`/scene/${currentScene}`);
+                    if (!cancelled && res.data?.scene) {
+                        const s = res.data.scene as SceneConfig;
+                        setSceneConfig({
+                            planeSize: [s.plane_width || 30, s.plane_depth || 30],
+                            floorColor: s.floor_color || "#70543E",
+                            hasSky: !!s.has_sky,
+                            name: s.name || `Scene ${currentScene}`,
+                        });
+                        return;
+                    }
+                } catch {
+                }
+                if (!cancelled) {
+                    setSceneConfig({
+                        planeSize: [30, 30],
+                        floorColor: getFallbackFloorColor(currentScene),
+                        hasSky: true,
+                        name: `Scene ${currentScene}`,
+                    });
+                }
+            };
+
+            loadSceneConfig();
+            return () => {
+                cancelled = true;
+            };
+        }, [currentScene]);
+
+        useEffect(() => {
+            let cancelled = false;
+
             const loadTeleports = async () => {
                 try {
                     const res = await axios.get(`/scene/${currentScene}/teleports`);
@@ -272,8 +319,12 @@ export const Scene = forwardRef<
                         const offset = computeNeighborOffset(link);
 
                         try {
-                            const res = await axios.get(`/scene/${link.to_scene}/items`);
-                            const items: SceneItem[] = (res.data?.items || []).map((row: any) => ({
+                            const [itemsRes, sceneRes] = await Promise.all([
+                                axios.get(`/scene/${link.to_scene}/items`),
+                                axios.get(`/scene/${link.to_scene}`),
+                            ]);
+
+                            const items: SceneItem[] = (itemsRes.data?.items || []).map((row: any) => ({
                                 instance_id: row.instance_id,
                                 name: row.name,
                                 pos_x: row.pos_x,
@@ -289,11 +340,13 @@ export const Scene = forwardRef<
                                 state: row.state || null,
                             }));
 
+                            const s = sceneRes.data?.scene;
                             results.push({
                                 sceneId: link.to_scene,
                                 offset,
                                 items,
-                                floorColor: getFloorColor(link.to_scene),
+                                floorColor: s?.floor_color || getFallbackFloorColor(link.to_scene),
+                                planeSize: [s?.plane_width || 30, s?.plane_depth || 30],
                             });
                         } catch (err) {
                             console.error("Failed to load neighbor scene", link.to_scene, err);
@@ -301,7 +354,8 @@ export const Scene = forwardRef<
                                 sceneId: link.to_scene,
                                 offset,
                                 items: [],
-                                floorColor: getFloorColor(link.to_scene),
+                                floorColor: getFallbackFloorColor(link.to_scene),
+                                planeSize: [30, 30],
                             });
                         }
                     })
@@ -323,17 +377,6 @@ export const Scene = forwardRef<
             const id = ++markerIdRef.current;
             setClickMarkers((prev) => [...prev, { id, x, z, born: performance.now() }]);
         };
-
-        const sceneConfig = useMemo(() => {
-            switch (currentScene) {
-                case 1:
-                    return { planeSize: [30, 30] as [number, number], floorColor: "#70543E" };
-                case 2:
-                    return { planeSize: [30, 30] as [number, number], floorColor: "#4A4A4A" };
-                default:
-                    return { planeSize: [30, 30] as [number, number], floorColor: "#70543E" };
-            }
-        }, [currentScene]);
 
         const halfExtent = sceneConfig.planeSize[0] / 2;
         const gridCols = Math.ceil(sceneConfig.planeSize[0] / cellSize);
@@ -750,42 +793,66 @@ export const Scene = forwardRef<
 
         useEffect(() => {
             if (!camera || !gl.domElement) return;
+
             const tc = new TransformControls(camera, gl.domElement);
             tc.setMode("translate");
-            tc.addEventListener("dragging-changed", (event) => {
-                if (orbitControls.current) orbitControls.current.enabled = !event.value;
-            });
-            tc.addEventListener("objectChange", () => {
-                const obj = tc.object;
-                if (obj && obj.userData.instance_id) {
+            tc.setSize(0.9);
+
+            const onObjectChange = () => {
+                if (tc.object && tc.mode === "scale") {
+                    const s = tc.object.scale.x;
+                    tc.object.scale.setScalar(s);
+                }
+            };
+            tc.addEventListener("objectChange", onObjectChange);
+
+            tc.addEventListener("dragging-changed", (event: any) => {
+                if (orbitControls.current) {
+                    orbitControls.current.enabled = !event.value;
+                }
+
+                if (!event.value && tc.object && tc.object.userData?.instance_id) {
+                    const obj = tc.object;
+                    const s = obj.scale.x;
+                    obj.scale.setScalar(s);
+
                     socket.emit("admin_update_item", {
                         instance_id: obj.userData.instance_id,
                         pos_x: obj.position.x,
                         pos_y: obj.position.y,
                         pos_z: obj.position.z,
                         rotation_y: obj.rotation.y,
-                        scale: obj.scale.x,
+                        scale: s,
                     });
                 }
             });
+
             scene.add(tc);
             transformControlsRef.current = tc;
+
             return () => {
+                tc.removeEventListener("objectChange", onObjectChange);
                 scene.remove(tc);
                 tc.dispose();
+                transformControlsRef.current = null as any;
             };
         }, [scene, gl, camera, socket, transformControlsRef]);
 
         useEffect(() => {
-            if (transformControlsRef.current && selectedItemId) {
+            const tc = transformControlsRef.current;
+            if (!tc) return;
+
+            if (selectedItemId != null) {
                 const obj = itemsGroup.current?.getObjectByName(`item-${selectedItemId}`);
                 if (obj) {
-                    transformControlsRef.current.attach(obj);
+                    tc.attach(obj);
+                } else {
+                    tc.detach();
                 }
-            } else if (transformControlsRef.current) {
-                transformControlsRef.current.detach();
+            } else {
+                tc.detach();
             }
-        }, [selectedItemId, transformControlsRef]);
+        }, [selectedItemId, transformControlsRef, sceneItems]);
 
         useFrame(() => {
             if (!hasSky) {
@@ -880,7 +947,12 @@ export const Scene = forwardRef<
                     userData={{ isWalkableGround: true }}
                 >
                     <planeGeometry args={sceneConfig.planeSize} />
-                    <meshStandardMaterial color={sceneConfig.floorColor} />
+                    <meshStandardMaterial
+                        color={sceneConfig.floorColor}
+                        polygonOffset={true}
+                        polygonOffsetFactor={1}
+                        polygonOffsetUnits={1}
+                    />
                 </mesh>
 
                 {neighbors.map((n) => (
@@ -890,7 +962,7 @@ export const Scene = forwardRef<
                         offset={n.offset}
                         items={n.items}
                         floorColor={n.floorColor}
-                        planeSize={[30, 30]}
+                        planeSize={n.planeSize}
                         opacity={neighborOpacity}
                     />
                 ))}

@@ -26,6 +26,9 @@ export function NeighborScene({
                 color: floorColor,
                 transparent: true,
                 opacity: 0.92 * opacity,
+                polygonOffset: true,
+                polygonOffsetFactor: 1,
+                polygonOffsetUnits: 1,
             }),
         [floorColor, opacity]
     );
@@ -50,6 +53,7 @@ export function NeighborScene({
                         rotationY={item.rotation_y || 0}
                         scale={item.scale || 1}
                         instance_id={item.instance_id}
+                        isWalkable={!!item.is_walkable}
                     />
                 );
             })}
