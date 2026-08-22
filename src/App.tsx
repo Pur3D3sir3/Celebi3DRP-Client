@@ -27,6 +27,7 @@ function App() {
     const [user, setUser] = useState<any>(null);
     const [token, setToken] = useState<string | null>(localStorage.getItem("token"));
     const [currentScene, setCurrentScene] = useState<number>(1);
+    const [activeCharacter, setActiveCharacter] = useState<any>(null);
 
     useEffect(() => {
         if (token) {
@@ -64,8 +65,17 @@ function App() {
             .catch(() => setScreen("login"));
     };
 
-    const handleSelectCharacter = () => {
-        setScreen("hotel");
+    const handleSelectCharacter = async () => {
+        try {
+            const res = await axios.get("/active-character", {
+                headers: { Authorization: `Bearer ${token!}` },
+            });
+            setActiveCharacter(res.data.character);
+            setCurrentScene(res.data.character.current_scene || 1);
+            setScreen("hotel");
+        } catch {
+            setScreen("character_select");
+        }
     };
 
     const handleEnterGame = () => {
@@ -77,6 +87,7 @@ function App() {
         localStorage.removeItem("token");
         setToken(null);
         setUser(null);
+        setActiveCharacter(null);
         setCurrentScene(1);
         setScreen("login");
     };
@@ -101,12 +112,13 @@ function App() {
                 <CharacterSelect token={token!} onSelect={handleSelectCharacter} />
             ) : screen === "hotel" ? (
                 <HotelView
-                    onSelectMode={(mode) => {
-                        if (mode === "free_roam") {
-                            handleEnterGame();
-                        }
+                    character={activeCharacter}
+                    onEnterWorld={() => {
+                        setCurrentScene(activeCharacter?.current_scene || 1);
+                        handleEnterGame();
                     }}
                     onLogout={handleLogout}
+                    onChangeCharacter={() => setScreen("character_select")}
                 />
             ) : (screen === "game" || screen === "game-loading") ? (
                 <>
@@ -252,7 +264,6 @@ function GameContent({
 
             ctx.clearRect(0, 0, width, height);
 
-            // Background
             const bgGradient = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, radius);
             bgGradient.addColorStop(0, 'rgba(20, 20, 35, 0.92)');
             bgGradient.addColorStop(0.65, 'rgba(12, 12, 25, 0.96)');
@@ -267,7 +278,6 @@ function GameContent({
             ctx.arc(centerX, centerY, radius - 6, 0, Math.PI * 2);
             ctx.fill();
 
-            // Border rings
             ctx.strokeStyle = '#2a2a2a';
             ctx.lineWidth = 3.2;
             ctx.lineCap = 'round';
@@ -283,12 +293,10 @@ function GameContent({
             const playerPos = sceneRef.current?.getLocalPos() ?? new THREE.Vector3(0, 0, 0);
             const heading = sceneRef.current?.getAzimuth() || 0;
 
-            // ── Rotated map content ──
             ctx.save();
             ctx.translate(centerX, centerY);
             ctx.rotate(heading);
 
-            // Blocked items
             sceneItems.forEach((item) => {
                 const dx = (item.pos_x - playerPos.x) * mapScale;
                 const dz = (item.pos_z - playerPos.z) * mapScale;
@@ -314,7 +322,6 @@ function GameContent({
                 ctx.restore();
             });
 
-            // Interactable dots
             sceneItems.forEach((item) => {
                 if (!item.is_interactable) return;
                 const dx = (item.pos_x - playerPos.x) * mapScale;
@@ -333,7 +340,6 @@ function GameContent({
                 ctx.fill();
             });
 
-            // Other players
             characters.forEach((char) => {
                 if (char.id === socket.id) return;
                 const dx = (char.position[0] - playerPos.x) * mapScale;
@@ -349,7 +355,6 @@ function GameContent({
 
             ctx.restore();
 
-            // Player dot (always center, upright)
             ctx.shadowColor = '#00bfff';
             ctx.shadowBlur = 5;
             ctx.fillStyle = '#0000ff';
@@ -358,7 +363,6 @@ function GameContent({
             ctx.fill();
             ctx.shadowBlur = 0;
 
-            // ── NESW letters – RuneScape style (always upright) ──
             const compass = [
                 { label: 'N', angle: 0 },
                 { label: 'E', angle: Math.PI / 2 },
@@ -373,18 +377,15 @@ function GameContent({
             ctx.textBaseline = 'middle';
 
             compass.forEach(({ label, angle }) => {
-                // Position rotates with heading, letter itself stays upright
                 const screenAngle = angle + heading;
                 const x = centerX + Math.cos(screenAngle) * labelRadius;
                 const y = centerY + Math.sin(screenAngle) * labelRadius;
 
-                // Soft glow
                 ctx.shadowColor = 'rgba(255, 255, 255, 0.55)';
                 ctx.shadowBlur = 3;
                 ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
                 ctx.fillText(label, x, y);
 
-                // Crisp pass
                 ctx.shadowBlur = 0;
                 ctx.fillText(label, x, y);
             });
@@ -516,7 +517,6 @@ function GameContent({
                 />
             )}
 
-            {/* MINIMAP + RUN + WORLD */}
             <div className="fixed top-6 left-6 z-[900] flex flex-col items-center gap-3 pointer-events-auto select-none">
                 <div className="relative w-40 h-40 rounded-full overflow-hidden bg-gradient-to-b from-gray-900/95 to-gray-950/95
                         border-4 border-indigo-600/50 hover:border-indigo-400/80
@@ -531,7 +531,6 @@ function GameContent({
                 </div>
 
                 <div className="flex flex-row gap-2 mt-2">
-                    {/* RUN TOGGLE */}
                     <div className="flex flex-col items-center gap-1">
                         <div
                             className={`relative w-12 h-12 rounded-full transition-all duration-300 group
@@ -561,7 +560,6 @@ function GameContent({
                         </div>
                     </div>
 
-                    {/* WORLD BUTTON */}
                     <div className="relative w-12 h-12 rounded-full bg-gradient-to-b from-blue-900/90 to-blue-950/90
                           border-3 border-blue-500/50 hover:border-blue-400/80
                           shadow-xl shadow-black/40 hover:scale-110 hover:shadow-blue-500/30
