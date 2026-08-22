@@ -60,6 +60,14 @@ export const SocketProvider: React.FC<ExtendedSocketProviderProps> = ({ children
             setIsSceneReady(true);
         };
 
+        const handleSceneChange = (data: { scene: number; position?: [number, number, number] }) => {
+            console.log("Received scene_change:", data);
+            // Keep isSceneReady true — no black loader, no full reload.
+            // Do NOT clear sceneItems here. The new scene_items event will replace them atomically.
+            // This prevents the empty/flicker frame.
+            onSceneChange(data.scene);
+        };
+
         socket.on("connect", () => {
             console.log("Socket connected successfully (id:", socket.id, ")");
         });
@@ -74,12 +82,7 @@ export const SocketProvider: React.FC<ExtendedSocketProviderProps> = ({ children
         socket.on("update_scene_item", handleUpdateSceneItem);
         socket.on("remove_item", handleRemoveItem);
         socket.on("scene_ready", handleSceneReady);
-        socket.on("scene_change", (data: { scene: number }) => {
-            console.log("Received scene_change:", data);
-            setIsSceneReady(false);
-            setSceneItems([]);
-            onSceneChange(data.scene);
-        });
+        socket.on("scene_change", handleSceneChange);
 
         socket.connect();
 
@@ -95,7 +98,7 @@ export const SocketProvider: React.FC<ExtendedSocketProviderProps> = ({ children
             socket.off("update_scene_item", handleUpdateSceneItem);
             socket.off("remove_item", handleRemoveItem);
             socket.off("scene_ready", handleSceneReady);
-            socket.off("scene_change");
+            socket.off("scene_change", handleSceneChange);
             socket.disconnect();
         };
     }, [socket, onSceneChange]);

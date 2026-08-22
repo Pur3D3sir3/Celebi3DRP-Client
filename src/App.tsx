@@ -404,7 +404,9 @@ function GameContent({
         return () => cancelAnimationFrame(animationFrameId);
     }, [sceneItems, characters, socket.id, sceneRef, currentScene]);
 
-    if (isInitialLoading || !isSceneReady || !dataReceived || loaderVisible) {
+    // Only show the full black loader on the very first enter into the world.
+    // Scene changes no longer trigger it — camera, neighbors and player stay live.
+    if (isInitialLoading || !dataReceived || loaderVisible) {
         let title = "Entering Velvet Horizon";
         let subtitle = "Connecting • Loading players & world";
         if (dataReceived) {

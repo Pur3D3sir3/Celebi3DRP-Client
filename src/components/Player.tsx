@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo, useRef } from "react";
 import { useGLTF } from "@react-three/drei";
-import { useFrame } from "@react-three/fiber";
+import { useFrame, useThree } from "@react-three/fiber";
 import { SkeletonUtils } from "three-stdlib";
 import * as THREE from "three";
 import { Billboard, Html } from "@react-three/drei";
@@ -22,6 +22,7 @@ const CONTINUOUS_RECONCILE_ALPHA = 0.04;
 const END_PATH_DISABLE_THRESHOLD = 0.92;
 const TURN_RATE = 9.5;
 const PICKUP_TIMESCALE = 1.0;
+const TELEPORT_LOCK_MS = 650;
 
 type AnimationClips = {
     idle: THREE.AnimationClip | null;
@@ -98,6 +99,8 @@ export function Player({
     const lastUpdateRef = useRef(0);
     const { socket, sceneItems } = useSocket();
     const isLocal = character.id === socket.id;
+    const { scene: threeScene } = useThree();
+    const groundRay = useRef(new THREE.Raycaster());
 
     const currentSpeedRef = useRef(WALK_SPEED);
     currentSpeedRef.current = runEnabled ? RUN_SPEED : WALK_SPEED;
@@ -105,6 +108,7 @@ export function Player({
     const hasInitialSnapped = useRef(false);
     const currentYaw = useRef(0);
     const targetYaw = useRef(0);
+    const teleportLockUntil = useRef(0);
 
     const modelUrl = (() => {
         let m = character.model || "/meshy/male1.glb";
@@ -222,6 +226,23 @@ export function Player({
         let step = worldStep / curveLength;
         step = Math.min(step, 0.25);
         return step;
+    };
+
+    const applyGroundHeight = (pos: THREE.Vector3) => {
+        if (!isLocal) return;
+        groundRay.current.set(
+            new THREE.Vector3(pos.x, pos.y + 6, pos.z),
+            new THREE.Vector3(0, -1, 0)
+        );
+        groundRay.current.far = 18;
+        const hits = groundRay.current.intersectObjects(threeScene.children, true);
+
+        for (const hit of hits) {
+            if (hit.object.userData?.isWalkableGround) {
+                pos.y = hit.point.y;
+                break;
+            }
+        }
     };
 
     useEffect(() => {
@@ -380,15 +401,18 @@ export function Player({
         const handleSceneChange = (data: { scene: number; position?: [number, number, number] }) => {
             if (data.position && group.current) {
                 group.current.position.set(...data.position);
-                if (localPosRef?.current) localPosRef.current.copy(group.current.position);
+                if (localPosRef?.current) localPosRef.current.set(...data.position);
                 targetPosition.current.set(...data.position);
+
                 pathCurve.current = null;
                 pathProgress.current = 0;
                 velocity.current.set(0, 0, 0);
+
                 setIsPickupLocked(false);
                 isInteracting.current = false;
                 pickupBlendStartedRef.current = false;
                 setCurrentState("idle");
+
                 if (actions.idle) {
                     actions.idle.reset().play();
                     actions.idle.time = 0;
@@ -400,6 +424,8 @@ export function Player({
                         action.setEffectiveWeight(0);
                     }
                 });
+
+                teleportLockUntil.current = performance.now() + TELEPORT_LOCK_MS;
             }
         };
 
@@ -412,6 +438,7 @@ export function Player({
 
         const advancePath = (dtSeconds: number) => {
             if (!pathCurve.current || !group.current) return;
+            if (performance.now() < teleportLockUntil.current) return;
 
             const speed = currentSpeedRef.current;
             const curveLength = pathCurve.current.getLength();
@@ -425,6 +452,7 @@ export function Player({
                 const tangent = pathCurve.current.getTangentAt(pathProgress.current).normalize();
 
                 group.current.position.copy(targetPoint);
+                applyGroundHeight(group.current.position);
                 velocity.current.copy(tangent.multiplyScalar(speed));
 
                 if (tangent.lengthSq() > 0.0001) {
@@ -445,7 +473,8 @@ export function Player({
             } else {
                 const endPoint = pathCurve.current.getPointAt(1);
                 group.current.position.copy(endPoint);
-                if (localPosRef?.current) localPosRef.current.copy(endPoint);
+                applyGroundHeight(group.current.position);
+                if (localPosRef?.current) localPosRef.current.copy(group.current.position);
                 pathCurve.current = null;
                 pathProgress.current = 0;
                 velocity.current.set(0, 0, 0);
@@ -501,10 +530,34 @@ export function Player({
         const dt = Math.min(delta, 0.05);
         const pos = group.current.position;
         const speed = currentSpeedRef.current;
+        const isTeleportLocked = performance.now() < teleportLockUntil.current;
 
-        const isCurrentlyMoving = isLocal ? !!pathCurve.current : remoteIsMovingRef.current;
+        const isCurrentlyMoving = isLocal ? !!pathCurve.current && !isTeleportLocked : remoteIsMovingRef.current;
         if (isLocal && onMovingChange) {
             onMovingChange(isCurrentlyMoving);
+        }
+
+        if (isLocal && isTeleportLocked) {
+            if (localPosRef?.current) {
+                localPosRef.current.copy(pos);
+            }
+            if (currentState !== "idle" && !isPickupLocked) {
+                setCurrentState("idle");
+            }
+            applySmoothTurn(dt);
+            mixer.update(dt);
+            if (group.current) group.current.scale.set(1, 1, 1);
+            clone.scale.set(1, 1, 1);
+            clone.traverse((obj) => {
+                if ((obj as any).isBone) obj.scale.set(1, 1, 1);
+            });
+            if (rootBoneRef.current) {
+                rootBoneRef.current.scale.set(1, 1, 1);
+                rootBoneRef.current.position.x = 0;
+                rootBoneRef.current.position.z = 0;
+            }
+            clone.updateMatrixWorld(true);
+            return;
         }
 
         if (isLocal && pathCurve.current) {
@@ -526,6 +579,7 @@ export function Player({
                 const tangent = pathCurve.current.getTangentAt(pathProgress.current).normalize();
 
                 pos.copy(targetPoint);
+                applyGroundHeight(pos);
                 velocity.current.copy(tangent.multiplyScalar(speed));
 
                 if (tangent.lengthSq() > 0.0001) {
@@ -564,7 +618,8 @@ export function Player({
             } else {
                 const endPoint = pathCurve.current.getPointAt(1);
                 pos.copy(endPoint);
-                if (localPosRef?.current) localPosRef.current.copy(endPoint);
+                applyGroundHeight(pos);
+                if (localPosRef?.current) localPosRef.current.copy(pos);
                 pathCurve.current = null;
                 pathProgress.current = 0;
                 velocity.current.set(0, 0, 0);
@@ -637,6 +692,7 @@ export function Player({
             }
         } else if (isLocal) {
             applySmoothTurn(dt);
+            applyGroundHeight(pos);
 
             if (pendingInteraction && setPendingInteraction && maxInteractDist) {
                 if (isInteracting.current) return;
