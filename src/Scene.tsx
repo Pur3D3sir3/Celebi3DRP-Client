@@ -40,6 +40,13 @@ useGLTF.preload("/meshy/male2run.glb");
 useGLTF.preload("/items/soda_can.glb");
 useGLTF.preload("/items/rock.glb");
 
+type ClickMarker = {
+    id: number;
+    x: number;
+    z: number;
+    born: number;
+};
+
 export const Scene = forwardRef<{
     handleWalk: (point: { x: number; y: number; z: number }) => void;
     handleInteract: (item: SceneItem) => void;
@@ -63,6 +70,9 @@ export const Scene = forwardRef<{
     const [localPath, setLocalPath] = useState<[number, number, number][]>([]);
     const [pendingInteraction, setPendingInteraction] = useState<{ type: string; instance_id: number; position: [number, number, number] } | null>(null);
     const [speeches, setSpeeches] = useState<{ [key: string]: { text: string; time: number } }>({});
+    const [clickMarkers, setClickMarkers] = useState<ClickMarker[]>([]);
+    const markerIdRef = useRef(0);
+
     const itemsGroup = useRef<THREE.Group>(null!);
     const orbitControls = useRef<any>(null!);
     const { scene, gl, camera } = useThree();
@@ -130,6 +140,7 @@ export const Scene = forwardRef<{
     useEffect(() => {
         setLocalPath([]);
         setPendingInteraction(null);
+        setClickMarkers([]);
     }, [currentScene]);
 
     useEffect(() => {
@@ -137,6 +148,11 @@ export const Scene = forwardRef<{
             localPosRef.current.set(...localPlayer.position);
         }
     }, [localPlayer]);
+
+    const spawnClickMarker = (x: number, z: number) => {
+        const id = ++markerIdRef.current;
+        setClickMarkers((prev) => [...prev, { id, x, z, born: performance.now() }]);
+    };
 
     const sceneConfig = useMemo(() => {
         switch (currentScene) {
@@ -374,6 +390,7 @@ export const Scene = forwardRef<{
             path = smoothPath(path);
             setLocalPath(path);
             setPendingInteraction(null);
+            spawnClickMarker(target[0], target[2]);
         }
     };
 
@@ -391,6 +408,7 @@ export const Scene = forwardRef<{
         if (path.length > 0) {
             path = smoothPath(path);
             setLocalPath(path);
+            spawnClickMarker(target[0], target[2]);
         }
     };
 
@@ -402,6 +420,7 @@ export const Scene = forwardRef<{
                 path = smoothPath(path);
                 setLocalPath(path);
                 setPendingInteraction(null);
+                spawnClickMarker(target[0], target[2]);
             }
         },
         handleInteract: (item: SceneItem) => {
@@ -500,6 +519,13 @@ export const Scene = forwardRef<{
             targetPos.z
         );
         state.camera.lookAt(lookTarget);
+
+        // Expire click markers
+        const now = performance.now();
+        setClickMarkers((prev) => {
+            const next = prev.filter((m) => now - m.born < 700);
+            return next.length === prev.length ? prev : next;
+        });
     });
 
     useEffect(() => {
@@ -634,6 +660,47 @@ export const Scene = forwardRef<{
                 <planeGeometry args={sceneConfig.planeSize} />
                 <meshStandardMaterial color={sceneConfig.floorColor} />
             </mesh>
+
+            {/* RuneScape-style click markers */}
+            {clickMarkers.map((m) => {
+                const age = Math.min(1, (performance.now() - m.born) / 700);
+                const scale = 0.35 + age * 0.95;
+                const opacity = 1 - age;
+                return (
+                    <group key={m.id} position={[m.x, 0.04, m.z]}>
+                        <mesh rotation-x={-Math.PI / 2} scale={[scale, scale, 1]}>
+                            <ringGeometry args={[0.22, 0.32, 32]} />
+                            <meshBasicMaterial
+                                color="#f5d76e"
+                                transparent
+                                opacity={opacity * 0.85}
+                                side={THREE.DoubleSide}
+                                depthWrite={false}
+                            />
+                        </mesh>
+                        <mesh rotation-x={-Math.PI / 2} scale={[scale * 0.55, scale * 0.55, 1]}>
+                            <ringGeometry args={[0.08, 0.14, 24]} />
+                            <meshBasicMaterial
+                                color="#ffe9a0"
+                                transparent
+                                opacity={opacity}
+                                side={THREE.DoubleSide}
+                                depthWrite={false}
+                            />
+                        </mesh>
+                        <mesh rotation-x={-Math.PI / 2}>
+                            <circleGeometry args={[0.06, 16]} />
+                            <meshBasicMaterial
+                                color="#fff3c0"
+                                transparent
+                                opacity={opacity * 0.9}
+                                depthWrite={false}
+                            />
+                        </mesh>
+                    </group>
+                );
+            })}
+
             {showTeleportDebug &&
                 teleportSpots
                     .filter((tp) => tp.from_scene === currentScene)

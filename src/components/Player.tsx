@@ -7,8 +7,10 @@ import { Billboard, Html } from "@react-three/drei";
 import { Character } from "../lib/types";
 import { useSocket } from "../lib/constants";
 
-const WALK_SPEED = 4.8;
-const RUN_SPEED = 8.6;
+// Tuned for animation match + RuneScape-style feel
+const WALK_SPEED = 2.85;
+const RUN_SPEED = 5.15;
+
 const UPDATE_INTERVAL = 0.14;
 const TRANSITION_DURATION = 0.18;
 const IDLE_FALLBACK_WEIGHT = 0.2;
@@ -18,8 +20,6 @@ const MIN_CORRECTION_DIST = 1.1;
 const CONTINUOUS_RECONCILE_THRESHOLD = 1.6;
 const CONTINUOUS_RECONCILE_ALPHA = 0.04;
 const END_PATH_DISABLE_THRESHOLD = 0.92;
-
-// RuneScape-style turn speed (higher = faster turn)
 const TURN_RATE = 9.5;
 
 type AnimationClips = {
@@ -180,12 +180,13 @@ export function Player({
     }, [mixer, clips]);
 
     useEffect(() => {
+        // Animation playback rates tuned to the new movement speeds
         if (actions.walkforward) {
-            actions.walkforward.timeScale = runEnabled ? 2.05 : 1.42;
+            actions.walkforward.timeScale = runEnabled ? 1.75 : 1.12;
         }
-        if (actions.walkstart) actions.walkstart.timeScale = 1.32;
-        if (actions.stopwalk) actions.stopwalk.timeScale = 1.32;
-        if (actions.run) actions.run.timeScale = 1.22;
+        if (actions.walkstart) actions.walkstart.timeScale = 1.1;
+        if (actions.stopwalk) actions.stopwalk.timeScale = 1.1;
+        if (actions.run) actions.run.timeScale = 1.15;
     }, [actions, runEnabled]);
 
     const [currentState, setCurrentState] = useState<AnimState>("idle");
@@ -207,18 +208,24 @@ export function Player({
     const lastSimTimeRef = useRef(performance.now());
     const backgroundIntervalRef = useRef<number | null>(null);
 
-    // Smoothly rotate the character toward targetYaw
     const applySmoothTurn = (dt: number) => {
         if (!group.current) return;
         const diff = shortestAngleDiff(currentYaw.current, targetYaw.current);
         if (Math.abs(diff) < 0.001) {
             currentYaw.current = targetYaw.current;
         } else {
-            // Exponential ease – feels like RuneScape turning
             const t = 1 - Math.exp(-TURN_RATE * dt);
             currentYaw.current += diff * t;
         }
         group.current.rotation.y = currentYaw.current;
+    };
+
+    const computeStep = (curveLength: number, speed: number, dt: number) => {
+        if (curveLength <= 0.0001) return 1;
+        const worldStep = speed * dt;
+        let step = worldStep / curveLength;
+        step = Math.min(step, 0.25);
+        return step;
     };
 
     useEffect(() => {
@@ -245,13 +252,10 @@ export function Player({
         }
 
         const points = localPath.map((p) => new THREE.Vector3(...p));
-        // Keep current position – do not snap to first point (avoids pop)
-        // Only set path; movement will catch up naturally
         pathCurve.current = new THREE.CatmullRomCurve3(points, false, "centripetal", 0.5);
         pathProgress.current = getClosestProgress(pathCurve.current, group.current.position);
         lastSimTimeRef.current = performance.now();
 
-        // Set desired facing toward the start of the new path (smooth turn will handle it)
         if (points.length >= 2) {
             const dir = new THREE.Vector3().subVectors(points[1], points[0]).normalize();
             if (dir.lengthSq() > 0.0001) {
@@ -383,9 +387,7 @@ export function Player({
             const curveLength = pathCurve.current.getLength();
             if (curveLength <= 0) return;
 
-            let step = (speed * 0.78 * dtSeconds) / curveLength;
-            step = Math.min(step, 0.011);
-
+            const step = computeStep(curveLength, speed, dtSeconds);
             pathProgress.current = Math.min(pathProgress.current + step, 1);
 
             if (pathProgress.current < 1) {
@@ -395,7 +397,6 @@ export function Player({
                 group.current.position.copy(targetPoint);
                 velocity.current.copy(tangent.multiplyScalar(speed));
 
-                // Smooth turn instead of lookAt
                 if (tangent.lengthSq() > 0.0001) {
                     targetYaw.current = Math.atan2(tangent.x, tangent.z);
                 }
@@ -478,9 +479,7 @@ export function Player({
 
         if (isLocal && pathCurve.current) {
             const curveLength = pathCurve.current.getLength();
-            let step = (speed * dt) / curveLength;
-            step = Math.min(step, 0.015);
-
+            const step = computeStep(curveLength, speed, dt);
             pathProgress.current = Math.min(pathProgress.current + step, 1);
 
             if (pathProgress.current < 1) {
@@ -490,7 +489,6 @@ export function Player({
                 pos.copy(targetPoint);
                 velocity.current.copy(tangent.multiplyScalar(speed));
 
-                // Smooth turn – no more snap rotation
                 if (tangent.lengthSq() > 0.0001) {
                     targetYaw.current = Math.atan2(tangent.x, tangent.z);
                 }
@@ -562,7 +560,6 @@ export function Player({
                     setPendingInteraction(null);
                     setCurrentState("idle");
 
-                    // Face the item smoothly
                     const faceDir = new THREE.Vector3().subVectors(itemPos, pos).normalize();
                     if (faceDir.lengthSq() > 0.0001) {
                         targetYaw.current = Math.atan2(faceDir.x, faceDir.z);
@@ -599,7 +596,6 @@ export function Player({
                 }
             }
         } else if (isLocal) {
-            // Still apply any pending smooth turn while standing
             applySmoothTurn(dt);
 
             if (pendingInteraction && setPendingInteraction && maxInteractDist) {
@@ -680,7 +676,6 @@ export function Player({
             const dx = targetPosition.current.x - group.current.position.x;
             const dz = targetPosition.current.z - group.current.position.z;
             if (dx * dx + dz * dz > 0.0004) {
-                // Smooth remote facing too
                 const desired = Math.atan2(dx, dz);
                 const diff = shortestAngleDiff(group.current.rotation.y, desired);
                 group.current.rotation.y += diff * (1 - Math.exp(-10 * dt));
