@@ -185,7 +185,29 @@ function GameContent({
     const [placingItem, setPlacingItem] = useState<{ item_id: number; name: string } | null>(null);
     const transformControlsRef = useRef<TransformControls>(null);
     const [runEnabled, setRunEnabled] = useState(false);
+    const [energy, setEnergy] = useState(100);
     const minimapCanvasRef = useRef<HTMLCanvasElement>(null);
+    const isMovingRef = useRef(false);
+
+    // RuneScape-style energy system
+    useEffect(() => {
+        const interval = setInterval(() => {
+            setEnergy((prev) => {
+                if (runEnabled && isMovingRef.current) {
+                    // Drain while running and moving
+                    const next = Math.max(0, prev - 1.15);
+                    if (next <= 0) {
+                        setRunEnabled(false);
+                    }
+                    return next;
+                } else {
+                    // Regenerate when not running (or standing still)
+                    return Math.min(100, prev + 0.65);
+                }
+            });
+        }, 1000);
+        return () => clearInterval(interval);
+    }, [runEnabled]);
 
     useEffect(() => {
         const hideMenu = () => setContextMenu(null);
@@ -214,12 +236,11 @@ function GameContent({
         });
     };
 
-    // Add this helper in GameContent component (before return)
     const getFloorColor = (scene: number): string => {
         switch (scene) {
-            case 1: return '#70543E';  // Brown dirt/grass
-            case 2: return '#4A4A4A';  // Gray stone/road
-            default: return '#4a3a2e'; // Fallback dark brown
+            case 1: return '#70543E';
+            case 2: return '#4A4A4A';
+            default: return '#4a3a2e';
         }
     };
 
@@ -365,14 +386,14 @@ function GameContent({
             const labelRadius = radius - 12;
 
             compass.forEach(({ label, angle }) => {
-                const screenAngle = angle + heading;  // +heading to rotate with map
+                const screenAngle = angle + heading;
 
                 const x = centerX + Math.cos(screenAngle) * labelRadius;
                 const y = centerY + Math.sin(screenAngle) * labelRadius;
 
                 ctx.save();
                 ctx.translate(x, y);
-                ctx.rotate(-screenAngle); // counter-rotate text to stay upright
+                ctx.rotate(-screenAngle);
 
                 ctx.shadowColor = 'rgba(255, 255, 255, 0.6)';
                 ctx.shadowBlur = 3;
@@ -460,6 +481,8 @@ function GameContent({
                     placingItem={placingItem}
                     setPlacingItem={setPlacingItem}
                     transformControlsRef={transformControlsRef}
+                    runEnabled={runEnabled}
+                    onMovingChange={(moving) => { isMovingRef.current = moving; }}
                 />
             </Canvas>
 
@@ -505,19 +528,17 @@ function GameContent({
                     socket={socket}
                     sceneItems={sceneItems}
                     transformControls={transformControlsRef}
-                    // High z-index ensures it's above minimap
                     className="fixed inset-0 z-[9999] overflow-auto bg-black/60 backdrop-blur-sm"
                 />
             )}
 
-            {/* MINIMAP – lower z-index than inventory */}
+            {/* MINIMAP + RUN BUTTON */}
             <div className="fixed top-6 left-6 z-[900] flex flex-col items-center gap-3 pointer-events-auto select-none">
                 <div className="relative w-40 h-40 rounded-full overflow-hidden bg-gradient-to-b from-gray-900/95 to-gray-950/95
                         border-4 border-indigo-600/50 hover:border-indigo-400/80
                         shadow-2xl shadow-black/60 backdrop-blur-lg
                         transition-all duration-300 hover:scale-[1.03] hover:shadow-indigo-600/30
-                        cursor-pointer group"
-                     onClick={() => console.log('Minimap clicked - future zoom/center action')}>
+                        cursor-pointer group">
                     <div className="absolute inset-0">
                         <canvas ref={minimapCanvasRef} width={160} height={160} className="w-full h-full" />
                     </div>
@@ -526,20 +547,34 @@ function GameContent({
                 </div>
 
                 <div className="flex flex-row gap-2 mt-2">
-                    <div className={`relative w-12 h-12 rounded-full transition-all duration-300 group
+                    {/* RUN TOGGLE */}
+                    <div className="flex flex-col items-center gap-1">
+                        <div
+                            className={`relative w-12 h-12 rounded-full transition-all duration-300 group
                            shadow-xl shadow-black/40 hover:scale-110 hover:shadow-indigo-400/30
                            cursor-pointer border-3 ${runEnabled
-                        ? 'bg-gradient-to-b from-emerald-500/90 to-emerald-600/90 border-emerald-400/80 hover:border-emerald-300/90 shadow-emerald-500/40'
-                        : 'bg-gray-900/90 border-indigo-500/40 hover:border-indigo-400/70 shadow-indigo-500/20'}`}
-                         onClick={() => setRunEnabled(!runEnabled)}>
-                        <i className={`fas fa-running absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 text-lg
+                                ? 'bg-gradient-to-b from-emerald-500/90 to-emerald-600/90 border-emerald-400/80 hover:border-emerald-300/90 shadow-emerald-500/40'
+                                : 'bg-gray-900/90 border-indigo-500/40 hover:border-indigo-400/70 shadow-indigo-500/20'}`}
+                            onClick={() => {
+                                if (energy > 5) setRunEnabled(!runEnabled);
+                            }}
+                        >
+                            <i className={`fas fa-running absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 text-lg
                            ${runEnabled ? 'text-emerald-900 drop-shadow-sm' : 'text-indigo-300 group-hover:text-indigo-100'}`} />
-                        {runEnabled && (
-                            <div className="absolute inset-0 rounded-full bg-emerald-400/30 blur animate-ping-slow" />
-                        )}
-                        <div className={`absolute -bottom-6 left-1/2 transform -translate-x-1/2 text-[10px] font-medium whitespace-nowrap
-                            ${runEnabled ? 'text-emerald-400' : 'text-gray-400 group-hover:text-indigo-300'}`}>
+                            {runEnabled && (
+                                <div className="absolute inset-0 rounded-full bg-emerald-400/30 blur animate-ping-slow" />
+                            )}
+                        </div>
+                        <div className={`text-[10px] font-medium whitespace-nowrap
+                            ${runEnabled ? 'text-emerald-400' : 'text-gray-400'}`}>
                             {runEnabled ? 'RUN' : 'WALK'}
+                        </div>
+                        {/* Energy bar */}
+                        <div className="w-12 h-1.5 bg-gray-800 rounded-full overflow-hidden border border-gray-700">
+                            <div
+                                className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-300"
+                                style={{ width: `${energy}%` }}
+                            />
                         </div>
                     </div>
 
@@ -552,8 +587,6 @@ function GameContent({
                         <div className="absolute -bottom-6 left-1/2 transform -translate-x-1/2 text-[10px] font-medium text-blue-400 group-hover:text-blue-200 whitespace-nowrap">
                             WORLD
                         </div>
-                        <button className="absolute inset-0 rounded-full opacity-0 hover:opacity-100"
-                                onClick={() => console.log('Open world map - TBD')} />
                     </div>
                 </div>
             </div>

@@ -22,6 +22,8 @@ interface SceneProps {
     placingItem: { item_id: number; name: string } | null;
     setPlacingItem: (item: { item_id: number; name: string } | null) => void;
     transformControlsRef: React.RefObject<TransformControls>;
+    runEnabled?: boolean;
+    onMovingChange?: (moving: boolean) => void;
 }
 
 useGLTF.preload("/meshy/idle.glb");
@@ -31,6 +33,9 @@ useGLTF.preload("/meshy/walkstop.glb");
 useGLTF.preload("/meshy/pickup.glb");
 useGLTF.preload("/meshy/male1.glb");
 useGLTF.preload("/meshy/male2.glb");
+useGLTF.preload("/meshy/male2idle.glb");
+useGLTF.preload("/meshy/male2walk.glb");
+useGLTF.preload("/meshy/male2run.glb");
 useGLTF.preload("/items/soda_can.glb");
 useGLTF.preload("/items/rock.glb");
 
@@ -40,7 +45,19 @@ export const Scene = forwardRef<{
     handleExamine: (item: SceneItem) => void;
     getAzimuth: () => number;
     getLocalPos: () => THREE.Vector3;
-}, SceneProps>(({ currentScene, setContextMenu, userRank, editMode, selectedItemId, setSelectedItemId, placingItem, setPlacingItem, transformControlsRef }, ref) => {
+}, SceneProps>(({
+                    currentScene,
+                    setContextMenu,
+                    userRank,
+                    editMode,
+                    selectedItemId,
+                    setSelectedItemId,
+                    placingItem,
+                    setPlacingItem,
+                    transformControlsRef,
+                    runEnabled = false,
+                    onMovingChange
+                }, ref) => {
     const { characters, socket, sceneItems } = useSocket();
     const [localPath, setLocalPath] = useState<[number, number, number][]>([]);
     const [pendingInteraction, setPendingInteraction] = useState<{ type: string; instance_id: number; position: [number, number, number] } | null>(null);
@@ -49,7 +66,6 @@ export const Scene = forwardRef<{
     const orbitControls = useRef<any>(null!);
     const { scene, gl, camera } = useThree();
 
-    // Camera – rotation is now direct (no lag), position is smoothly followed
     const azimuth = useRef(2.5);
     const elevation = useRef(0.3);
     const distance = useRef(12);
@@ -66,6 +82,51 @@ export const Scene = forwardRef<{
     const { timeOfDay, sunElevation, isDay } = useDayNight();
     const hasSky = currentScene === 1 || currentScene === 2;
     useAmbientAudio({ hasSky });
+
+    const idleGltf = useGLTF("/meshy/idle.glb");
+    const walkGltf = useGLTF("/meshy/walk.glb");
+    const startGltf = useGLTF("/meshy/walkstart.glb");
+    const stopGltf = useGLTF("/meshy/walkstop.glb");
+    const pickupGltf = useGLTF("/meshy/pickup.glb");
+
+    const male2IdleGltf = useGLTF("/meshy/male2idle.glb");
+    const male2WalkGltf = useGLTF("/meshy/male2walk.glb");
+    const male2RunGltf = useGLTF("/meshy/male2run.glb");
+
+    // Much more reliable clip picker
+    const getAnim = (gltf: any, preferredNames: string[] = []) => {
+        if (!gltf?.animations?.length) return null;
+
+        // 1. Try to find by name
+        for (const name of preferredNames) {
+            const found = gltf.animations.find((clip: THREE.AnimationClip) =>
+                clip.name.toLowerCase().includes(name.toLowerCase())
+            );
+            if (found) return found;
+        }
+
+        // 2. Prefer the longest clip (usually the main loop)
+        const sorted = [...gltf.animations].sort((a, b) => b.duration - a.duration);
+        return sorted[0] || gltf.animations[0] || null;
+    };
+
+    const male1Clips = useMemo(() => ({
+        idle: getAnim(idleGltf, ["idle", "stand"]),
+        walkforward: getAnim(walkGltf, ["walk", "forward"]),
+        walkstart: getAnim(startGltf, ["start", "walkstart"]),
+        stopwalk: getAnim(stopGltf, ["stop", "walkstop"]),
+        pickup: getAnim(pickupGltf, ["pickup", "pick"]),
+        run: null as THREE.AnimationClip | null,
+    }), [idleGltf, walkGltf, startGltf, stopGltf, pickupGltf]);
+
+    const male2Clips = useMemo(() => ({
+        idle: getAnim(male2IdleGltf, ["idle", "stand"]),
+        walkforward: getAnim(male2WalkGltf, ["walk", "forward"]),
+        walkstart: getAnim(male2WalkGltf, ["walk", "forward"]),
+        stopwalk: null as THREE.AnimationClip | null,
+        pickup: getAnim(pickupGltf, ["pickup", "pick"]),
+        run: getAnim(male2RunGltf, ["run", "sprint", "jog", "running"]),
+    }), [male2IdleGltf, male2WalkGltf, male2RunGltf, pickupGltf]);
 
     useEffect(() => {
         setLocalPath([]);
@@ -373,21 +434,6 @@ export const Scene = forwardRef<{
         return () => clearInterval(interval);
     }, []);
 
-    const animationClips = useMemo(() => {
-        const idleGltf = useGLTF("/meshy/idle.glb");
-        const walkGltf = useGLTF("/meshy/walk.glb");
-        const startGltf = useGLTF("/meshy/walkstart.glb");
-        const stopGltf = useGLTF("/meshy/walkstop.glb");
-        const pickupGltf = useGLTF("/meshy/pickup.glb");
-        return {
-            idle: idleGltf.animations[1],
-            walkforward: walkGltf.animations[1],
-            walkstart: startGltf.animations[1],
-            stopwalk: stopGltf.animations[1],
-            pickup: pickupGltf.animations[1],
-        };
-    }, []);
-
     const showTeleportDebug = import.meta.env.DEV;
     const teleportSpots = useMemo(() => [
         { from_scene: 1, from_x: 15, from_z: 0, radius: 2.0, to_scene: 2 },
@@ -421,14 +467,12 @@ export const Scene = forwardRef<{
         };
     }, [keys]);
 
-    // Camera – rotation is instant & responsive, position follow is smooth
     useFrame((state, delta) => {
         if (!localPlayer) return;
         const dt = Math.min(delta, 0.05);
 
         const rotSpeed = 1.6;
 
-        // Direct rotation (no lag)
         if (keys.a) azimuth.current -= rotSpeed * dt;
         if (keys.d) azimuth.current += rotSpeed * dt;
         if (keys.w) elevation.current = Math.max(0.08, elevation.current - rotSpeed * 0.55 * dt);
@@ -436,7 +480,6 @@ export const Scene = forwardRef<{
 
         azimuth.current = azimuth.current % (Math.PI * 2);
 
-        // Only zoom is lightly smoothed
         distance.current += (targetDistance.current - distance.current) * (1 - Math.exp(-9 * dt));
 
         const targetPos = localPosRef.current;
@@ -449,7 +492,6 @@ export const Scene = forwardRef<{
 
         const idealCamPos = targetPos.clone().add(offset);
 
-        // Strong but still smooth follow
         const followSmooth = 1 - Math.exp(-12 * dt);
         state.camera.position.lerp(idealCamPos, followSmooth);
 
@@ -606,23 +648,30 @@ export const Scene = forwardRef<{
                             <meshBasicMaterial color="#ffaa00" transparent opacity={0.45} side={THREE.DoubleSide} />
                         </mesh>
                     ))}
-            {characters.map((character) => (
-                <Player
-                    key={character.id}
-                    character={character}
-                    clips={animationClips}
-                    localPath={character.id === socket.id ? localPath : undefined}
-                    onNextWaypoint={character.id === socket.id ? onNextWaypoint : undefined}
-                    localPosRef={character.id === socket.id ? localPosRef : undefined}
-                    pendingInteraction={character.id === socket.id ? pendingInteraction : undefined}
-                    setPendingInteraction={character.id === socket.id ? setPendingInteraction : undefined}
-                    maxInteractDist={character.id === socket.id ? maxInteractDist : undefined}
-                    speech={speeches[character.id]?.text}
-                    onSpeech={character.id === socket.id ? (text: string) => {
-                        setSpeeches((prev) => ({ ...prev, [character.id]: { text, time: Date.now() } }));
-                    } : undefined}
-                />
-            ))}
+            {characters.map((character) => {
+                const isMale2 = character.model.includes('male2');
+                const clips = isMale2 ? male2Clips : male1Clips;
+
+                return (
+                    <Player
+                        key={character.id}
+                        character={character}
+                        clips={clips}
+                        localPath={character.id === socket.id ? localPath : undefined}
+                        onNextWaypoint={character.id === socket.id ? onNextWaypoint : undefined}
+                        localPosRef={character.id === socket.id ? localPosRef : undefined}
+                        pendingInteraction={character.id === socket.id ? pendingInteraction : undefined}
+                        setPendingInteraction={character.id === socket.id ? setPendingInteraction : undefined}
+                        maxInteractDist={character.id === socket.id ? maxInteractDist : undefined}
+                        speech={speeches[character.id]?.text}
+                        onSpeech={character.id === socket.id ? (text: string) => {
+                            setSpeeches((prev) => ({ ...prev, [character.id]: { text, time: Date.now() } }));
+                        } : undefined}
+                        runEnabled={runEnabled}
+                        onMovingChange={character.id === socket.id ? onMovingChange : undefined}
+                    />
+                );
+            })}
             <group ref={itemsGroup}>
                 {sceneItems.map((item: SceneItem) => {
                     const key = `item-${item.instance_id}`;
